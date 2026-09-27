@@ -1,0 +1,10 @@
+Apple M5 Pro
+RAM: 24 GB (25769803776 bytes)
+Logical CPUs: 15
+OS: macOS 26.6.2 (Build 25G83)
+rustc: 1.97.1 (8bab26f4f 2026-07-14)
+cargo: 1.97.1
+curve: BLS12-381 (ark-bls12-381 0.5), Ristretto255 (curve25519-dalek 4.1)
+AES: AES-256-GCM (aes-gcm 0.10)
+threads: rayon default (all cores) for ark-ff/ark-ec parallel features
+date: 2026-09-11

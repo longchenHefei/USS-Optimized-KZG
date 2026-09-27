@@ -1,0 +1,37 @@
+[package]
+name = "uss-khvc"
+version = "0.1.0"
+edition = "2021"
+authors = ["Long Chen", "Shuangyu He"]
+description = "KHVC and an optimized USS implementation with UE baselines"
+
+[dependencies]
+ark-bls12-381 = "0.5"
+ark-ec = { version = "0.5", features = ["parallel"] }
+ark-ff = { version = "0.5", features = ["parallel"] }
+ark-poly = { version = "0.5", features = ["parallel"] }
+ark-serialize = { version = "0.5", features = ["derive"] }
+ark-std = { version = "0.5", features = ["std"] }
+aes-gcm = "0.10"
+curve25519-dalek = { version = "4.1", features = ["rand_core", "digest"] }
+digest = "0.10"
+hex = "0.4"
+rand = "0.8"
+rayon = "1.10"
+sha2 = "0.10"
+clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "fairbench"
+path = "src/bin/fairbench.rs"
+
+[[bin]]
+name = "rlwrbench"
+path = "src/bin/rlwrbench.rs"

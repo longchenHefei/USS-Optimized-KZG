@@ -1,0 +1,11 @@
+suite,scheme,n,k_or_size,op,ms,bytes,notes
+uss,KHVC-USS,8,4096,pargen,3.8792,672,small
+uss,KHVC-USS,8,4096,store,8.0266,82864,small
+uss,KHVC-USS,8,4096,rev,1.9049,4096,small
+uss,KHVC-USS,8,4096,fileup,4.7543,4240,small
+uss,KHVC-USS,8,4096,keyup,7.5114,4240,small
+uss,KHVC-USS,32,4096,pargen,7.5840,1824,small
+uss,KHVC-USS,32,4096,store,34.5034,331312,small
+uss,KHVC-USS,32,4096,rev,2.0237,4096,small
+uss,KHVC-USS,32,4096,fileup,19.5187,4240,small
+uss,KHVC-USS,32,4096,keyup,26.3310,4240,small

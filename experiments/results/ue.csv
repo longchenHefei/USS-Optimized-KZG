@@ -1,0 +1,33 @@
+suite,scheme,n,k_or_size,op,ms,bytes,notes
+ue,AES-GCM,1,4096,enc,0.1642,4156,
+ue,AES-GCM,1,4096,dec,0.0979,4096,
+ue,AES-GCM,1,4096,reenc_naive,0.0495,4112,client reencrypt
+ue,Nested-AES,1,4096,enc,0.0444,4124,
+ue,Nested-AES,1,4096,upd,0.0527,4152,epoch=2
+ue,Nested-AES,1,4096,dec,0.0883,4096,epochs=2
+ue,RISE-G1,1,48,enc,0.2910,96,
+ue,RISE-G1,1,48,dec,0.4310,48,
+ue,RISE-G1,1,48,upd,0.4864,96,
+ue,SHINE0,1,32,enc,0.0403,32,
+ue,SHINE0,1,32,dec,0.0529,32,
+ue,SHINE0,1,32,upd,0.0400,32,
+ue,ReCrypt-KHPRF,1,4096,enc,6.5854,8208,
+ue,ReCrypt-KHPRF,1,4096,dec,1.1267,4096,
+ue,ReCrypt-KHPRF,1,4096,upd,6.0518,8208,
+ue,AES-GCM,1,1048576,enc,7.0888,1048636,
+ue,AES-GCM,1,1048576,dec,6.1240,1048576,
+ue,AES-GCM,1,1048576,reenc_naive,5.8058,1048592,client reencrypt
+ue,Nested-AES,1,1048576,enc,7.0054,1048604,
+ue,Nested-AES,1,1048576,upd,6.4122,1048632,epoch=2
+ue,Nested-AES,1,1048576,dec,14.6946,1048576,epochs=2
+ue,ReCrypt-KHPRF,1,1048576,enc,808.9797,2097168,
+ue,ReCrypt-KHPRF,1,1048576,dec,140.1471,1048576,
+ue,ReCrypt-KHPRF,1,1048576,upd,802.1713,2097168,
+ue,AES-GCM,1,104857600,enc,451.0767,104857660,
+ue,AES-GCM,1,104857600,dec,433.1570,104857600,
+ue,AES-GCM,1,104857600,reenc_naive,416.6745,104857616,client reencrypt
+ue,Nested-AES,1,104857600,enc,428.4802,104857628,
+ue,Nested-AES,1,104857600,upd,421.4091,104857656,epoch=2
+ue,Nested-AES,1,104857600,dec,855.7019,104857600,epochs=2
+ue,ReCrypt-KHPRF,1,104857600,enc_est,78933.7042,209716800,measured 1MB then x100
+ue,ReCrypt-KHPRF,1,104857600,upd_est,78571.1917,0,measured 1MB then x100

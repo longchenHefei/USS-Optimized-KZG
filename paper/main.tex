@@ -1079,4 +1079,114 @@ For bulk file updates, our Ring-LWR DEM provides provable $\mathrm{IND\text{-}CP
 Empirically, our single-slot \textsf{FileUp} algorithm achieves a $194$\,ms latency at $n=1024$ using closed-form one-hot opening proofs. 
 For a repository of four $1$\,GB files, end-to-end key updates complete in $254$\,s on the server with a compact $4240$-byte network transfer. 
 Overall, KHVC-USS demonstrates that integrity-aware, key-updatable secure storage can scale efficiently to real-world datasets without compromising on cryptographic security guarantees.
+
+
+\begin{thebibliography}{99}
+
+\bibitem{BB04}
+D.~Boneh, X.~Boyen.
+Short signatures without random oracles.
+EUROCRYPT 2004.
+
+\bibitem{CF13}
+D.~Catalano, D.~Fiore.
+Vector commitments and their applications.
+PKC 2013.
+
+\bibitem{KZG10}
+A.~Kate, G.M.~Zaverucha, I.~Goldberg.
+Constant-size commitments to polynomials and their applications.
+ASIACRYPT 2010.
+
+\bibitem{LT18}
+A.~Lehmann, B.~Tackmann.
+Updatable encryption with post-compromise security.
+EUROCRYPT 2018.
+
+\bibitem{EPRS17}
+A.~Everspaugh, K.~Paterson, T.~Ristenpart, S.~Scott.
+Key rotation for authenticated encryption.
+CRYPTO 2017.
+Implementation: \url{https://github.com/samscott89/ReCrypt}.
+
+\bibitem{SHINE}
+C.~Boyd, G.T.~Davies, K.~Gjøsteen, Y.~Jiang.
+Fast and secure updatable encryption.
+CRYPTO 2020, ePrint 2019/1457.
+Implementation: \url{https://github.com/YaoJGalteland/SHINE}.
+
+\bibitem{BDGJ20}
+D.~Boneh, S.~Eskandarian, S.~Kim, M.~Fisch.
+Improving speed and security in updatable encryption schemes.
+ASIACRYPT 2020, ePrint 2020/222.
+Implementation: \url{https://github.com/moshih/UpdateableEncryption_Code}.
+
+\bibitem{BLMR13}
+D.~Boneh, K.~Lewi, H.~Montgomery, A.~Raghunathan.
+Key homomorphic PRFs and their applications.
+CRYPTO 2013.
+
+\bibitem{BPR12}
+A.~Banerjee, C.~Peikert, A.~Rosen.
+Pseudorandom functions and lattices.
+EUROCRYPT 2012.
+
+\bibitem{APS15}
+M.R.~Albrecht, R.~Player, S.~Scott.
+On the concrete hardness of Learning with Errors.
+Journal of Mathematical Cryptology 9(3), 2015.
+Code: \url{https://github.com/malb/lattice-estimator}.
+
+\bibitem{NIST57}
+National Institute of Standards and Technology.
+Recommendation for key management: Part 1 --- general.
+NIST Special Publication 800-57 Part 1, Revision 5, 2020.
+Table~1: symmetric data-encryption keys, originator-usage period ${}<2$ years.
+
+\bibitem{CGLT23}
+L.~Chen, H.~Guo, Y.-N.~Li, Q.~Tang.
+Efficient secure storage with version control and key rotation.
+ASIACRYPT 2023, ePrint 2023/1421.
+
+\bibitem{CFGKN20}
+M.~Campanelli, D.~Fiore, N.~Greco, D.~Kolonelos, L.~Nizzardo.
+Incrementally aggregatable vector commitments.
+ASIACRYPT 2020.
+
+\bibitem{BBF19}
+D.~Boneh, B.~B\"unz, B.~Fisch.
+Batching techniques for accumulators.
+CRYPTO 2019.
+
+\bibitem{FK20}
+D.~Feist, D.~Khovratovich.
+Fast amortized KZG proofs.
+ePrint 2023/033 (FK20/FK22).
+
+\bibitem{FHS24}
+N.~Fleischhacker, M.~Hall-Andersen, M.~Simkin.
+Extractable witness encryption for KZG commitments.
+ASIACRYPT 2024.
+
+\bibitem{STW24}
+S.~Setty, J.~Thaler, R.~Wahby.
+Unlocking the lookup singularity with Lasso.
+EUROCRYPT 2024.
+
+\bibitem{BBHR18}
+E.~Ben-Sasson, I.~Bentov, Y.~Horesh, M.~Riabzev.
+Fast Reed--Solomon interactive oracle proofs of proximity.
+ICALP 2018.
+
+\bibitem{SHINEcode}
+\url{https://github.com/YaoJGalteland/SHINE}
+
+\bibitem{ReCryptcode}
+\url{https://github.com/samscott89/ReCrypt}
+
+\bibitem{BDGJcode}
+\url{https://github.com/moshih/UpdateableEncryption_Code}
+
+\end{thebibliography}
+
 \end{document}

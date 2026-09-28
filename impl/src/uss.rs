@@ -167,7 +167,10 @@ pub fn retrieve(pp: &UssPp, sk: &UssSk, repo: &Repository, i: usize) -> Option<V
     Some(file)
 }
 
-/// Update file `i`. Returns approximate token size in bytes (independent of n).
+/// Update file `i`.
+/// Wire token: `(i, Δh, ρ_δ, C_δ)` plus a fresh UE body (`O(1)+|m'|`, independent of `n`).
+/// The server recomputes one-hot openings from the public SRS and RISE-encrypts under `Y`.
+/// This co-located harness applies the opening refresh locally; the returned size matches the wire token.
 pub fn file_up<R: RngCore>(
     pp: &UssPp,
     sk: &UssSk,
@@ -211,7 +214,9 @@ pub fn file_up<R: RngCore>(
     repo.files[i].body_len = body_len;
     repo.files[i].a_ntt = a_ntt;
 
-    new_file.len() + 32 + 16 + rise_ct_bytes()
+    // Wire size: |m'| + ν (32) + tweak (16) + C_δ (48) + Δh||ρ_δ (64) ≈ |m'|+O(1).
+    // (RISE envelopes of the n openings are produced by the server from public data.)
+    new_file.len() + 32 + 16 + 48 + 64
 }
 
 /// Rotate keys. Header token is the RISE fields; the DEM token is one ring element.

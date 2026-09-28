@@ -50,14 +50,18 @@ Despite its strong theoretical security, existing USS constructions remain far f
 \end{enumerate}
 
 \subsection{Our Contributions.}
-In this paper, we bridge the gap between theoretical USS definitions and real-world performance by designing, instantiating, and measuring a fully practical, high-throughput USS system for large-file databases. Our main contributions are summarized as follows:
+In this paper, we bridge the gap between theoretical USS definitions and real-world performance by designing, instantiating, and evaluating a practical, high-throughput USS architecture for gigabyte-scale databases. Our primary contributions are summarized as follows:
 
 \begin{itemize}
-    \item \textbf{Linear-Size HVC ($\mathsf{KHVC}$):} We introduce $\mathsf{KHVC}$, a succinct KZG-based homomorphic vector commitment with an $O(n)$ Structured Reference String (SRS). $\mathsf{KHVC}$ achieves tight $q$-SDH position binding and statistical position hiding with a succinct auxiliary string $\mathsf{aux} = \rho \in \mathbb{F}_p$. By deriving a closed-form formula for single-slot updates, we eliminate dense FK20 evaluation overhead during $\mathsf{FileUp}$ operations. Compared to CF-HVC at $n = 1024$, $\mathsf{KHVC}$ reduces parameter size from $50.5\,\text{MB}$ to $96.3\,\text{KB}$ (over $500\times$ reduction) and setup time from $70.2\,\text{s}$ to $0.38\,\text{s}$.
-    \item \textbf{High-Throughput Ring-LWR DEM:} Exploiting the insight that USS requires only IND-CPA security for the DEM, we instantiate an efficient lattice-based DEM using a random-oracle Ring-LWR key-homomorphic PRF sized for up to 127 consecutive key updates (sufficient for decades of periodic rotation). By pre-caching public NTT representations and removing redundant header embeddings from the body ciphertexts, we achieve near-native payload update speeds with moderate expansion.
-    \item \textbf{Implementation \& End-to-End Evaluation:} We implement the complete USS architecture alongside the 2023 baseline in Rust using BLS12-381. On an Apple M5 Pro workstation, our Ring-LWR DEM achieves a re-encryption throughput of $32.6\,\text{MB/s}$ on $1\,\text{MB}$ payloads with a $2\times$ ciphertext expansion, demonstrating for the first time that USS can scale efficiently to gigabyte-sized cloud databases.
-\end{itemize}
+    \item \textbf{Linear-SRS Homomorphic Vector Commitment ($\mathsf{KHVC}$):} 
+    We design $\mathsf{KHVC}$, a succinct KZG-based homomorphic vector commitment with an $O(n)$ Structured Reference String (SRS) that maintains a constant-size auxiliary string $\mathsf{aux} = \rho \in \mathbb{F}_p$. We formally prove its tight position binding under the $q$-SDH assumption and statistical position hiding. Furthermore, by deriving a closed-form algorithm for single-slot updates (\texttt{open\_one\_hot}), we bypass dense FK20 evaluation overhead during $\mathsf{FileUp}$ operations. Compared to the quadratic Catalano--Fiore HVC baseline at $n = 1024$, $\mathsf{KHVC}$ compresses the operational SRS from $50.5\,\text{MB}$ to $96.3\,\text{KB}$ ($512\times$ reduction) and speeds up setup from $70.2\,\text{s}$ to $0.38\,\text{s}$.
 
+    \item \textbf{High-Throughput Ring-LWR DEM for Large Files:} 
+    Leveraging the architectural insight from CGLT23~\cite{CGLT23}—where payload integrity is fully guaranteed by the HVC stub, relaxing DEM requirements to $\mathrm{IND\text{-}CPA}$ security—we demonstrate that under a practical $127$-update lifecycle, a Ring-LWR-based Key-Homomorphic PRF provides sufficient noise budget without the computational overhead of RLWE. We deliver the first concrete instantiation and end-to-end evaluation of a Ring-LWR DEM tailored for large payloads, incorporating public polynomial NTT pre-caching and header elimination to maximize re-encryption throughput while maintaining generic lattice security above $2^{128}$.
+
+    \item \textbf{Complete Implementation \& End-to-End Evaluation:} 
+    We provide a production-grade Rust implementation (\texttt{uss-khvc}) of the complete USS framework alongside existing cryptographic baselines using Type-3 BLS12-381 pairings. Benchmarked on an Apple M5 Pro, our Ring-LWR DEM achieves a re-encryption throughput of $32.6\,\text{MB/s}$ on $1\,\text{MB}$ payload blocks ($254\,\text{s}$ total key rotation time for four $1\,\text{GB}$ files with a compact $4.2\,\text{KB}$ token), demonstrating for the first time that integrity-aware, key-updatable storage can scale efficiently to gigabyte-sized cloud databases.
+\end{itemize}
 \subsection{Related Work}
 \label{sec:intro_related_work}
 
@@ -230,7 +234,7 @@ $\mathsf{KHVC}$ inherits additive homomorphism directly from the underlying KZG 
 \]
 Re-randomization can be executed via $\mathsf{ReRand}(C) = C + \rho' [Z(\tau)]_1$, which updates the blinding scalar without altering any vector evaluations $F(\omega^i)$.
 
----
+
 
 \subsection{Formal Security Proofs}
 
@@ -272,7 +276,7 @@ For any unrevealed opening index $j \neq i^*$, the opening element is $\Lambda_{
 Since $\rho_0 \mapsto \rho_1$ is a uniform bijection over $\mathbb{F}_p$, the joint distribution $\left(C_0, \{\Lambda_{0, j}\}_{j \neq i^*}\right)$ and $\left(C_1, \{\Lambda_{1, j}\}_{j \neq i^*}\right)$ seen by the adversary in $\mathsf{Exp}_{\mathcal{A}, \mathsf{HVC}}^{\mathrm{PosHide}}$ are identical. Thus, an unbounded distinguisher has advantage at most $n/p$.
 \end{proof}
 
----
+
 
 \subsection{Efficiency Lemmas and Fast Updates}
 
@@ -314,7 +318,7 @@ A symmetric-key updatable encryption scheme $\mathsf{UE}$ consists of six algori
     \item $\mathsf{UE.ReEnc}(\Delta_{e+1},\mathsf{ct})\to\mathsf{ct}'$: updates a ciphertext from epoch $e$ to epoch $e+1$ using only the token.
 \end{itemize}
 Correctness requires $\mathsf{UE.Dec}(s_e,\mathsf{tweak},\mathsf{UE.Enc}(s_e,\mathsf{tweak},m))=m$ and, after any sequence of honest updates of length at most the scheme's noise budget,
-$\mathsf{UE.Dec}(s_{e+t},\mathsf{tweak},\mathsf{UE.ReEnc}^*(\mathsf{UE.Enc}(s_e,\mathsf{tweak},m)))=m$.
+$$\mathsf{UE.Dec}(s_{e+t},\mathsf{tweak},\mathsf{UE.ReEnc}^*(\mathsf{UE.Enc}(s_e,\mathsf{tweak},m)))=m.$$
 
 \paragraph{Oracles (following~\cite[§3.2]{LT18}).}
 \label{def:ue-oracles}

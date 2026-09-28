@@ -28,22 +28,17 @@
 \maketitle
 
 \begin{abstract}
-Updatable secure storage (USS) combines updatable encryption with a homomorphic vector commitment (HVC) so that a client can outsource a dynamic encrypted database, rotate keys, and still detect a malicious server that serves a stale file.
-The only published USS construction (Chen--Guo--Li--Tang, ASIACRYPT 2023) instantiates HVC from the Catalano--Fiore vector commitment and therefore carries an $O(n^2)$ common reference string, which is already tens of megabytes at $n=2^{10}$ files and infeasible at $n=2^{14}$.
-We give $\mathsf{KHVC}$, a KZG-based HVC with an $O(n)$ SRS that reuses a powers-of-tau setup, tight position binding from $q$-SDH, and statistical position hiding.
-We then instantiate USS over Type-3 pairings: openings live in $\GG_1$ and are wrapped by RISE (so the server can update them homomorphically).
-File bytes are a separate DEM.
-AES-256-GCM has no update, so it does not meet a rotation policy.
-The DEM we measure is a random-oracle Ring-LWR key-homomorphic PRF, which is CPA updatable encryption rather than authenticated encryption: plaintext integrity stays with the stub.
-A Feist--Khovratovich all-opening and a precomputed vanishing-polynomial opening remove the quadratic server work of a na\"ive KZG FileUp/KeyUp.
-We implement the scheme and the 2023 baseline in Rust (BLS12-381) and measure real costs, including 1\,GB files.\footnote{Artifact: \url{https://github.com/longchenHefei/USS-Optimized-KZG}. Reproduce with \texttt{cargo test --release -p uss-khvc}, \texttt{cargo run --release --bin fairbench}, \texttt{cargo run --release --bin rlwrbench}, and the CSVs in \texttt{experiments/results/}.}
-On an Apple M5 Pro, the KHVC verification SRS for $n=1024$ is 48.3\,KB and the operational parameters, including the KeyUp table, are 96.3\,KB, against 50.5\,MB for the 2023 Catalano--Fiore backend.
-A symmetric data key's originator-usage period is under two years~\cite{NIST57}, so a ciphertext kept for years to a few decades is updated tens of times.
-We take 128 updates as the bound.
-An 8-bit noise pad on the Ring-LWR DEM guarantees 127 of them in the worst case; after 128 updates on 64 blocks the largest measured rounding error was 78, and by 255 updates the pad had overflowed.
-At 1\,MB the DEM alone runs at 32.6\,MB/s with a $2\times$ ciphertext and a 4096-byte token.
-End-to-end KeyUp of four 1\,GB files, including the DEM scan, is 404\,s and a 4240-byte token, against tens of minutes to hours if SHINE0 or RISE is applied to the same bytes.
-Sparse FileUp is not uniformly faster: at $n=1024$ the Catalano--Fiore backend wins for a one-file update, and KHVC wins once about $2.6\log_2 n$ slots change.
+Updatable encryption (UE) rotates ciphertext keys from a short token.
+Updatable secure storage (USS) adds version integrity: a client outsources a dynamic encrypted database, keeps one short stub, and detects a malicious server that serves a stale file---even after the current secret leaks.
+The only published USS construction (Chen--Guo--Li--Tang, ASIACRYPT 2023) is theoretical in practice: its Catalano--Fiore HVC carries an $O(n^2)$ CRS (tens of megabytes already at $n=2^{10}$), and it left the large-file DEM unmeasured.
+This paper makes USS practical by removing those two bottlenecks.
+First, $\mathsf{KHVC}$ is a KZG-based HVC with an $O(n)$ SRS, tight $q$-SDH position binding, and statistical position hiding; at $n=1024$ ParGen drops from 70.2\,s to 0.38\,s and operational parameters from 50.5\,MB to 96.3\,KB.
+Second, CGLT23 already allows any IND-CPA UE as the DEM (integrity is OF-PTXT via the stub), so we instantiate a measured random-oracle Ring-LWR key-homomorphic PRF with no MAC, sized for 127 correct updates, and cache the public $a_b$ NTTs so KeyUp does not rebuild them.
+FileUp openings use a one-hot closed form instead of a dense FK20; openings for KeyUp still use precomputed $\{W_j\}$.
+We implement the scheme and the 2023 HVC baseline in Rust (BLS12-381) and measure real costs, including 1\,GB files.\footnote{Artifact: \url{https://github.com/longchenHefei/USS-Optimized-KZG}. Reproduce with \texttt{cargo test --release -p uss-khvc}, \texttt{cargo run --release --bin fairbench}, \texttt{cargo run --release --bin rlwrbench}, and the CSVs in \texttt{experiments/results/}.}
+On an Apple M5 Pro, at 1\,MB the DEM alone runs at 32.6\,MB/s with a $2\times$ ciphertext and a 4096-byte token.
+End-to-end KeyUp of four 1\,GB files is 254\,s and a 4240-byte token, against tens of minutes to hours if SHINE0 or RISE is applied to the same bytes.
+At $n=1024$, a one-file FileUp opening costs 194\,ms on KHVC versus about 62\,ms for Catalano--Fiore.
 \end{abstract}
 
 \noindent\textbf{Keywords:} vector commitment, KZG, updatable encryption, updatable secure storage, key rotation.
@@ -52,49 +47,32 @@ Sparse FileUp is not uniformly faster: at $n=1024$ the Catalano--Fiore backend w
 
 Cloud storage is encrypted, and industry standards (PCI DSS, AWS/GCP CMEK) demand periodic key rotation.
 Updatable encryption (UE)~\cite{LT18,EPRS17,BDGJ20,SHINE} lets a server re-key a ciphertext from a short token, without learning the plaintext.
-That is not enough for a dynamic database.
-After a file update, a malicious server can still return an old ciphertext that decrypts under the current key.
+That is not enough for a dynamic database: after a file update, a malicious server can still return an old ciphertext that decrypts under the current key.
 Chen, Guo, Li, and Tang~\cite{CGLT23} introduced updatable secure storage (USS) to add \emph{version integrity}: the client keeps one short stub, FileUp and KeyUp communication does not grow with the number of files, and a cheating server is caught even if the current secret has leaked.
+Their architecture is KEM+DEM: an HVC commits to file hashes, RISE wraps the openings, and the DEM is any ciphertext-independent UE that is only IND-CPA---OF-PTXT recomputes the file commitment after decryption, so the DEM needs no MAC.
 
-Putting an existing UE on the file bytes is not practical, and the reasons differ.
-On a 1\,MB plaintext, block-wise RISE encrypts at 0.40\,MB/s, a ReCrypt-style elliptic-curve KH-PRF at 1.29\,MB/s, and SHINE0 at 1.93\,MB/s, against 241\,MB/s for AES-GCM.
-Nested AES matches that speed for one wrap, but decryption walks every epoch, so it cannot be the long-term cipher.
-AES-GCM itself has no update algorithm.
-The count those schemes would have to support is modest.
-NIST limits the originator-usage period of a symmetric data-encryption key to less than two years~\cite[Table~1]{NIST57}; PCI DSS requires a cryptoperiod and a change when it ends, and does not fix a shorter period.
-A file kept for about seven years is therefore updated a handful of times at that bound, about seven times under annual rotation, and about twenty times if an annual rotation is kept up for a twenty-year archive.
-Quarterly rotation over twenty years is about eighty updates.
-Monthly rotation over twenty years is about two hundred and forty, which we do not target.
-We take \textbf{128 updates} as the engineering bound: it covers annual rotation for more than a century and quarterly rotation for about thirty years, and it is the same knob used to configure nested UE for 128 re-encryptions~\cite{BDGJ20}.
+That blueprint was never turned into a working large-file system.
+Two bottlenecks blocked it.
+The 2023 HVC is Catalano--Fiore~\cite{CF13}: the public parameters contain every pairwise product $g^{z_i z_j}$, i.e.\ an $O(n^2)$ CRS.
+At $n=1024$ this is already 50\,MB in our implementation; at $n=10^4$ it is several gigabytes, and ParGen alone takes about a minute at $n=1024$.
+Separately, wrapping file bytes in RISE, SHINE0, or an elliptic-curve KH-PRF is far too slow for gigabyte payloads (Section~\ref{sec:eval}), AES-GCM has no update algorithm, and nested AES forces decryption to walk every epoch.
+NIST limits the originator-usage period of a symmetric data-encryption key to less than two years~\cite[Table~1]{NIST57}; a file kept for years to a few decades is therefore updated tens of times.
+We take \textbf{128 updates} as the engineering bound: it covers annual rotation for more than a century and quarterly rotation for about thirty years, matching the nested-UE knob of~\cite{BDGJ20}.
 
-The architecture that fits this bound is KEM+DEM, with the DEM itself a UE.
-RISE wraps openings and stays on group elements, because those updates have to be homomorphic.
-The file body is not AES-GCM.
-It is a ciphertext-independent CPA scheme: USS games that mention the body are CPA games, and OF-PTXT recomputes the file hash after decryption, so the DEM does not need a MAC.
-We instantiate that DEM with a random-oracle Ring-LWR key-homomorphic PRF, one negacyclic product per block.
-At 1\,MB it encrypts and updates at 32.6\,MB/s, with a $2\times$ ciphertext and a 4096-byte token that does not grow with the file.
-Eight bits of padding per coefficient guarantee 127 updates in the worst case, because each update adds at most $1$ to the rounding error.
-On 64 blocks the largest measured error after 128 updates was 78, still inside the pad; after 255 updates it was already 144.
-So this parameter sits on the 128-update bound.
-It does not cover a monthly rotation of a multi-decade archive without a wider pad or a client re-encryption.
-End-to-end KeyUp of four 1\,GB files is 404\,s and 4240 bytes (RISE header plus the DEM token).
-
-The 2023 construction commits to file hashes with a homomorphic vector commitment (HVC) built from Catalano--Fiore~\cite{CF13}.
-The public parameters contain every pairwise product $g^{z_i z_j}$, i.e.\ $O(n^2)$ group elements.
-At $n=1024$ this is already 50\,MB of CRS in our implementation; at $n=10^4$ it is several gigabytes.
-The 2023 scheme had no public implementation; this paper provides one, so the large-file cost is no longer a guess.
-
+This paper removes both bottlenecks and measures the result.
 \paragraph{Contributions.}
 \begin{enumerate}[leftmargin=1.4em]
-  \item \textbf{KHVC.} A KZG~\cite{KZG10} HVC with linear SRS, $\mathsf{aux}=\rho\in\FF_p$ (succinct, as required by~\cite{CGLT23}), tight $q$-SDH position binding (no $1/n$ loss), statistical position hiding, and public rerandomization.
-  \item \textbf{KEM+DEM USS.} The 2023 protocol on BLS12-381: RISE~\cite{LT18} on $\GG_1$ for openings (SXDH); a CPA Ring-LWR KH-PRF as the DEM for file bytes, sized for 127 correct updates; FK20~\cite{FK20} all-openings for FileUp; precomputed $\{[Z(\tau)/(\tau-\omega_j)]_1\}$ for the header half of KeyUp.
-  KeyUp sends both the RISE token and $\Delta=s'-s$, and the server rewrites every body.
-  \item \textbf{Implementation and measurements.} A Rust crate with KHVC, Catalano--Fiore HVC, RISE, SHINE0, ReCrypt-style KH-PRF, nested AES-GCM, the Ring-LWR DEM, and end-to-end USS.
+  \item \textbf{KHVC (practical HVC).} A KZG~\cite{KZG10} HVC with linear SRS, $\mathsf{aux}=\rho\in\FF_p$ (succinct, as required by~\cite{CGLT23}), tight $q$-SDH position binding (no $1/n$ loss), statistical position hiding, and public rerandomization.
+  One-hot FileUp openings use a closed form in the precomputed vanishing openings $\{W_j\}$, so a single-slot update does not run a dense FK20.
+  \item \textbf{CPA Ring-LWR DEM.} We follow CGLT23's allowance that the DEM may be any IND-CPA UE: integrity stays with the stub.
+  We instantiate a random-oracle Ring-LWR key-homomorphic PRF~\cite{BDGJ20}, sized for 127 correct updates (8-bit noise pad), store public $a_b$ NTTs with each file so KeyUp does not rebuild them, and drop the redundant embedding of $h_i$ inside the body ciphertext that CGLT23 wrote into the DEM.
+  KeyUp sends the RISE token and $\Delta=s'-s$; the server rewrites every body.
+  \item \textbf{Implementation and measurements.} A Rust crate with KHVC, Catalano--Fiore HVC, RISE, SHINE0, ReCrypt-style KH-PRF, nested AES-GCM, the Ring-LWR DEM, and end-to-end USS on BLS12-381.
   We compare the 2023 CF-HVC backend with KHVC at the same $n$, and we compare payload UE, including the 128-update Ring-LWR DEM, on the same machine.
 \end{enumerate}
 
-We do not claim that ``hidden KZG'' is new~\cite{KZG10,FHS24}.
-The cryptographic novelty is an HVC that meets the USS interface with a linear SRS; the systems novelty is a working USS for large files, compared against the 2023 backend and against payload-only key rotation.
+We do not claim that ``hidden KZG'' is new~\cite{KZG10,FHS24}, nor that CPA-only DEM integrity is a new USS theorem---that is already in~\cite{CGLT23}.
+The cryptographic novelty is an HVC that meets the USS interface with a linear SRS; the systems novelty is a working USS for large files, with the DEM and FileUp/KeyUp engineering that the 2023 paper left open.
 
 \section{Preliminaries}
 
@@ -268,12 +246,26 @@ A na\"ive synthetic division plus MSM is $O(n^2)$ group operations; FK20 is a To
 KeyUp opens the zero vector, so only the second term remains: $n$ scalar multiplications by the precomputed $W_j$.
 \end{lemma}
 
+\begin{lemma}[One-hot FileUp openings]
+\label{lem:onehot}
+Let $\Delta\in\FF_p$, let $i\in\{0,\dots,n-1\}$, and let $f=\Delta L_i$ where $L_i$ is the Lagrange basis polynomial for $\omega^i$ on $\Omega$, so $L_i(X)=(\omega^i/n)\,Z(X)/(X-\omega^i)$.
+Write $F=f+\rho Z$ and $W_j=[Z(\tau)/(\tau-\omega^j)]_1$.
+Then for every $j\neq i$,
+\[
+\Lambda_j
+=\Delta\cdot\frac{\omega^i}{n}\cdot\frac{W_i-W_j}{\omega^i-\omega^j}+\rho\cdot W_j.
+\]
+The opening at slot $i$ is the ordinary KZG quotient of $F-\Delta$ at $\omega^i$ (one synthetic division and one MSM of length $n$).
+Both agree with $\mathsf{Open}$ on the one-hot vector; the dense FK20 path is unnecessary when a FileUp touches a single slot.
+\end{lemma}
+
 \section{USS instantiation}
 \label{sec:uss}
 
 We follow the VC-then-UE template of~\cite[§5]{CGLT23}.
 Let $\mathsf{COM}(m_i;\nu_i)=\mathsf{SHA\text{-}256}(m_i\Vert\nu_i)$ mapped into $\FF_p$ by interpreting the digest as a little-endian integer.
 In the ROM this is hiding (the nonce has 256 bits) and binding (finding $(m,\nu)\neq(m',\nu')$ with the same digest is a RO collision).
+Unlike~\cite{CGLT23}, the DEM ciphertext is $\nu_i\Vert m_i$ only: $h_i$ is recomputed on $\mathsf{Rev}$ and is not stored inside the body.
 
 \paragraph{DEM (ROM Ring-LWR).}
 The epoch key is one uniform secret $s\in R_q$, $R_q=\ZZ_q[X]/(X^N+1)$.
@@ -286,9 +278,11 @@ The ciphertext is $\mathsf{encode}(\nu_i\Vert m_i)+F_s(b)$, one ring element per
 The KeyUp token is $\Delta=s'-s\in R_q$ (4096 bytes).
 The server adds $F_\Delta(b)$ to every block.
 In $\ZZ_p$ this is a fresh encryption under $s'$ plus a rounding error of infinity norm at most $1$ per update, hence at most $127$ after $127$ updates, which the pad absorbs.
+Each file record stores the twisted NTT of every public $a_b$ alongside the tweak (about 8\,KB per block, rebuildable from the tweak, not a secret).
+KeyUp and $\mathsf{Rev}$ reuse that cache; they do not re-hash and re-NTT $a_b$ on every block.
 Openings are still wrapped by RISE in $\GG_1$.
 There is no per-file AES seed: body confidentiality is this DEM, not a re-wrap of a static key.
-We claim CPA only.
+We claim CPA only, as already permitted for the USS DEM in~\cite{CGLT23}.
 OF-PTXT recomputes $\mathsf{COM}$ after decryption, so a mauled body that decodes to a different file fails verification, and the DEM carries no MAC.
 
 \paragraph{$\mathsf{ParGen}(1^\lambda,n)$.}
@@ -300,27 +294,33 @@ Sample a RISE key pair $(k,Y=k g_1)$ and a uniform DEM secret $s\in R_q$.
 The USS secret is $(k,s)$, not $\rho$.
 
 \paragraph{$\mathsf{Store}(\mathsf{pp},k,s,(m_1,\dots,m_n))$.}
-For each $i$: sample $\nu_i$ and a tweak; encrypt $\nu_i\Vert m_i$ under $F_s$ as above; RISE-encrypt the KHVC opening $\Lambda_i$.
+For each $i$: sample $\nu_i$ and a tweak; encrypt $\nu_i\Vert m_i$ under $F_s$ as above and cache the $a_b$ NTTs; RISE-encrypt the KHVC opening $\Lambda_i$.
 Let $h_i=\mathsf{COM}(m_i;\nu_i)$.
-The client samples a fresh $\rho$, sets $(C,\rho)\gets\mathsf{KHVC.Com}(h_1,\dots,h_n)$, and sends the repository (Ring-LWR bodies, tweaks, RISE openings) and stub $C$ to the server.
+The client samples a fresh $\rho$, sets $(C,\rho)\gets\mathsf{KHVC.Com}(h_1,\dots,h_n)$, and sends the repository (Ring-LWR bodies, tweaks, cached $a_b$, RISE openings) and stub $C$ to the server.
 The client may discard $\rho$ after Store: later FileUp/KeyUp sample a new $\rho_\delta$ or $\rho_0$.
 The server never receives commit-$\rho$.
 
 \paragraph{$\mathsf{Rev}(\mathsf{pp},k,s,\mathsf{repo},i)$.}
-RISE-decrypt the opening; rebuild $a_b$ from the stored tweak; subtract $F_s(b)$; decode $\nu_i\Vert m_i$; recompute $h_i$; $\mathsf{KHVC.Ver}$ the stub at $i$; output $m_i$ or $\bot$.
+RISE-decrypt the opening; subtract $F_s(b)$ using the cached $a_b$ NTT; decode $\nu_i\Vert m_i$; recompute $h_i$; $\mathsf{KHVC.Ver}$ the stub at $i$; output $m_i$ or $\bot$.
 
 \paragraph{$\mathsf{FileUp}(\mathsf{pp},k,\mathsf{repo},i,m_i')$.}
-The client downloads file $i$, recovers $(m_i,\nu_i)$, samples $\nu_i'$ and $h_i'=\mathsf{COM}(m_i';\nu_i')$, and builds a sparse delta vector with a single nonzero $h_i'-h_i$.
-It samples $\rho_\delta$, commits the delta, and sends the delta commitment together with a fresh Ring-LWR ciphertext of the new file under the current $s$ and a fresh tweak.
-The server KHVC-opens the delta at \emph{all} $n$ points (FK20 if $n\ge 1024$, else the na\"ive all-open) and homomorphically adds each RISE-wrapped opening.
+The client downloads file $i$, recovers $(m_i,\nu_i)$, samples $\nu_i'$ and $h_i'=\mathsf{COM}(m_i';\nu_i')$, and builds a one-hot delta with nonzero slot $h_i'-h_i$.
+It samples $\rho_\delta$, commits the delta, and sends the delta commitment together with a fresh Ring-LWR ciphertext of the new file under the current $s$ and a fresh tweak (with a fresh $a_b$ cache).
+The server opens the delta at all $n$ points by Lemma~\ref{lem:onehot} and homomorphically adds each RISE-wrapped opening.
 Communication is $O(|m_i'|)$ plus $O(1)$ group elements, independent of $n$ and of other files.
+Dense all-open (FK20) remains available when many slots change at once; the single-file path measured below uses the one-hot form.
 
 \paragraph{$\mathsf{KeyUp}(\mathsf{pp},(k,s),(k',s'),\mathsf{repo})$.}
 The client sends a RISE token $(\Delta_{\mathsf{R}}=k'/k,\,Y'=k'g_1)$, a fresh hiding nonce $\rho_0\in\FF_p$, and the DEM token $\Delta=s'-s\in R_q$.
 The implementation returns 4240 bytes.\footnote{Header fields: $\Delta_{\mathsf{R}}\in\FF_p$ (32\,B), $Y'\in\GG_1$ (48\,B), $\rho_0$ (32\,B), plus a 32-byte counter word (144\,B). DEM token: $N$ coefficients of $\ZZ_q$ (4096\,B). Total $144+4096=4240$.}
-The server RISE-updates every opening, adds $\mathsf{RISE.Enc}_{k'}(\rho_0\cdot W_j)$ to each opening, adds $[\rho_0 Z(\tau)]_1$ to the stub, and adds $F_\Delta(b)$ to every body block.
-Bodies are rewritten.
+The server RISE-updates every opening, adds $\mathsf{RISE.Enc}_{k'}(\rho_0\cdot W_j)$ to each opening, adds $[\rho_0 Z(\tau)]_1$ to the stub, and adds $F_\Delta(b)$ to every body block using the cached $a_b$ NTTs.
+Bodies are rewritten eagerly so that IND-REENC-CPA matches~\cite{CGLT23} without a lazy-update game.
 Table~\ref{tab:uss} times this full KeyUp.
+
+\paragraph{Lazy body KeyUp.}
+One could defer the body scan until $\mathsf{Rev}$ or $\mathsf{FileUp}$ and only rotate the RISE header immediately.
+That would cut KeyUp wall-clock on cold archives, but the intermediate repository is then a body under an old secret plus a public chain of $\Delta$'s, and IND-REENC-CPA would need a lazy restatement.
+We leave that variant as future work and measure the eager scan.
 
 \paragraph{Why Type-3 RISE.}
 Openings lie in $\GG_1$, so RISE must be instantiated there (SXDH).
@@ -373,7 +373,7 @@ Nothing is extracted from $\GG_2$.
 Follow~\cite[Thm.~4]{CGLT23}.
 The FileUp delta is one-hot.
 H1 hides the new $\mathsf{COM}$ value in the random oracle.
-H2 invokes RISE IND-ENC on the FK20 openings of the delta, and Ring-LWR on the fresh body under the current $s$ (a new tweak makes $a_b$ a fresh oracle string).
+H2 invokes RISE IND-ENC on the one-hot openings of the delta (Lemma~\ref{lem:onehot}), and Ring-LWR on the fresh body under the current $s$ (a new tweak makes $a_b$ a fresh oracle string).
 H3 invokes Theorem~\ref{thm:hide} on the updated stub.
 The same Type-3 pairing check replaces any symmetric-group extraction step in~\cite{CGLT23}.
 
@@ -408,7 +408,8 @@ It does not let the adversary replace the stub the client stores.
 \section{Implementation}
 
 A single Rust crate (\texttt{uss-khvc}) on arkworks 0.5 (BLS12-381), \texttt{aes-gcm} (AES baselines only), and \texttt{curve25519-dalek} 4.1.
-File bodies in \texttt{uss.rs} are the Ring-LWR DEM; KeyUp adds $F_\Delta$ to every block.
+File bodies in \texttt{uss.rs} are the Ring-LWR DEM with cached $a_b$ NTTs; KeyUp adds $F_\Delta$ to every block without rebuilding $a_b$.
+FileUp openings use \texttt{open\_one\_hot}; dense FK20 remains for microbenchmarks of $k=n$.
 The USS timings in Table~\ref{tab:uss} are one-shot measurements from \texttt{experiments/results/uss.csv} on this build.
 KHVC uses \texttt{Radix2EvaluationDomain} IFFTs and an explicit $\GG_1$ Cooley--Tukey FFT for FK20.
 Catalano--Fiore HVC stores $h_i\in\GG_1$, $\hat h_i\in\GG_2$, and off-diagonal $h_{i,j}\in\GG_1$ (Type-3 verification $e(C-m h_i,\hat h_i)=e(\Lambda_i,g_2)$).
@@ -551,8 +552,9 @@ $|m|$ & Enc & Upd & Dec & ns/B & $|ct|/|m|$ \\
 
 On 64 blocks the largest absolute rounding error was 42 after 64 updates and 78 after 128 updates, both inside the pad ($|e|<128$).
 On 2 blocks it was 144 after 255 updates, which the pad does not survive.
-Four 1\,GB bodies at the 1\,MB update median of Table~\ref{tab:rlwr} would be about 126\,s if $a_b$ were cached.
-The end-to-end USS KeyUp of Table~\ref{tab:uss} rebuilds each $a_b$ from the public tweak and takes 404\,s for the same four files, with a 4240-byte token.
+Four 1\,GB bodies at the 1\,MB update median of Table~\ref{tab:rlwr} would be about 126\,s of pure DEM work when $a_b$ is cached.
+The end-to-end USS KeyUp of Table~\ref{tab:uss} stores those NTTs with each file and measures 254\,s for the same four files, with a 4240-byte token (previously 404\,s when $a_b$ was rebuilt from the tweak on every block).
+The pure DEM estimate of 126\,s assumes the 1\,MB Upd median and no memory pressure; at $4\times 1$\,GB the $a_b$ cache is about $8\times$ the plaintext and the measured wall-clock sits between that estimate and the old rebuild path.
 The server rewrites a $2\times$ ciphertext locally.
 This is the payload rotation the 128-update policy actually costs.
 It is still about an order of magnitude faster than SHINE0 or RISE on the same bytes, and AES-GCM cannot update.
@@ -584,7 +586,7 @@ Verification CRS, $n=1024$ & 50.5\,MB & 48.3\,KB ($1070\times$) \\
 Operational CRS, $n=1024$ & 50.5\,MB & 96.3\,KB ($512\times$) \\
 ParGen, $n=1024$ & 70.2\,s & 0.38\,s ($185\times$) \\
 CRS, $n=2^{14}$ & $12.8$\,GB$^{\S}$ & 768\,KB / $\approx 1.5$\,MB \\
-KeyUp, $4\times 1$\,GB & --- (no public impl.) & 404\,s / 4240\,B \\
+KeyUp, $4\times 1$\,GB & --- (no public impl.) & 254\,s / 4240\,B \\
 \bottomrule
 \end{tabular}\\[0.3em]
 {\scriptsize $^{\S}$ $(16384/1024)^2\cdot 50.5\,\mathrm{MB}=12.8\,\mathrm{GB}$.
@@ -594,39 +596,39 @@ FileUp cost depends on $k$; see Table~\ref{tab:fileup-k}.}
 
 \begin{table}[htbp]
 \centering
-\caption{Server opening work for a FileUp that touches $k$ slots, $n=1024$. KHVC cells are measured \texttt{fileup\_all\_open} (FK20 does not see $k$). CF cells with $k<n$ are $k\cdot 63.13\,\mathrm{s}/1024$, a linear estimate from the measured dense all-open, not a sparse CF implementation.}
+\caption{Server opening work for a FileUp that touches $k$ slots, $n=1024$. KHVC $k=1$ uses the one-hot closed form (Lemma~\ref{lem:onehot}); denser $k$ use FK20. CF cells with $k<n$ are $k\cdot 63.13\,\mathrm{s}/1024$, a linear estimate from the measured dense all-open, not a sparse CF implementation.}
 \label{tab:fileup-k}
 \small
 \begin{tabular}{@{}lrrl@{}}
 \toprule
 $k$ & CF-HVC & KHVC & source \\
 \midrule
-1   & $\approx 62$\,ms & 1.62\,s & CF estimated, KHVC measured \\
-8   & $\approx 0.49$\,s & 1.62\,s & CF estimated, KHVC measured \\
-64  & $\approx 3.9$\,s  & 1.65\,s & CF estimated, KHVC measured \\
-$n$ & 63.1\,s & 1.62\,s & both measured ($39\times$ only here) \\
+1   & $\approx 62$\,ms & 194\,ms & CF estimated, KHVC one-hot \\
+8   & $\approx 0.49$\,s & 1.67\,s & CF estimated, KHVC FK20 \\
+64  & $\approx 3.9$\,s  & 1.69\,s & CF estimated, KHVC FK20 \\
+$n$ & 63.1\,s & 1.67\,s & both measured ($38\times$ here) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[htbp]
 \centering
-\caption{Key rotation of the \emph{same} repository. KHVC-USS KeyUp is measured (\texttt{uss.csv}), including the Ring-LWR body scan. Baselines re-key every file body. Algebraic-file rows have no stub and no OF-PTXT.}
+\caption{Key rotation of the \emph{same} repository. KHVC-USS KeyUp is measured with cached $a_b$ NTTs, including the Ring-LWR body scan. Baselines re-key every file body. Algebraic-file rows have no stub and no OF-PTXT.}
 \label{tab:uss-cmp}
 \small
 \begin{tabular}{@{}llrrr@{}}
 \toprule
 scheme & $n\times|m|$ & time & sent & OF-PTXT \\
 \midrule
-KHVC-USS            & $4\times 1$\,GB   & 404\,s & 4240\,B & yes \\
+KHVC-USS            & $4\times 1$\,GB   & 254\,s & 4240\,B & yes \\
 AES client re-enc   & $4\times 1$\,GB   & 17.9\,s$^{\ddagger}$ & 4.0\,GB & no \\
 Nested AES Upd      & $4\times 1$\,GB   & 17.5\,s$^{\ddagger}$ & 4.0\,GB & no \\
 ReCrypt-KHPRF (EC)  & $4\times 1$\,GB   & 55\,min$^{\ddagger}$ & 8.0\,GB & no \\
 SHINE0 on bodies    & $4\times 1$\,GB   & 37\,min$^{\ddagger}$ & 4.0\,GB & no \\
 RISE on bodies      & $4\times 1$\,GB   & 4.6\,h$^{\ddagger}$  & 8.0\,GB & no \\
-KHVC-USS            & $8\times 100$\,MB & 322\,s & 4240\,B & yes \\
+KHVC-USS            & $8\times 100$\,MB & 58.9\,s & 4240\,B & yes \\
 AES client re-enc   & $8\times 100$\,MB & 3.5\,s$^{\ddagger}$  & 800\,MB & no \\
-KHVC-USS            & $64\times 1$\,MB  & 8.72\,s & 4240\,B & yes \\
+KHVC-USS            & $64\times 1$\,MB  & 2.22\,s & 4240\,B & yes \\
 AES client re-enc   & $64\times 1$\,MB  & 0.28\,s & 64\,MB & no \\
 \bottomrule
 \end{tabular}\\[0.3em]
@@ -635,19 +637,19 @@ Block-wise algebraic throughput is essentially flat in $|m|$; a 1\,GB working se
 \end{table}
 
 The durable gain against the 2023 backend is the CRS: at $n=1024$ the operational parameters are $512\times$ smaller, and at $n=2^{14}$ Catalano--Fiore is 12.8\,GB against about 1.5\,MB.
-FileUp is not uniformly faster.
-FK20 costs about 1.62\,s independent of $k$, while the dense CF measurement scales to about $61.7k$\,ms, so the crossover is $k^{*}\approx 26\approx 2.6\log_2 n$.
-A one-file update favours CF-HVC; the dense case $k=n$ is the only row in which KHVC is $39\times$ faster.
-That is why a CF-USS 1\,GB experiment is missing: the 2023 CRS does not scale to the $n$ where USS is interesting, even when its sparse FileUp is cheaper.
+One-hot FileUp openings cut the single-slot KHVC cost from 1.62\,s to 194\,ms at $n=1024$ (about $3\times$ Catalano--Fiore's estimated 62\,ms, down from a $26\times$ gap when FK20 was used for $k=1$).
+Dense FK20 is still about 1.67\,s independent of $k\ge 8$, while the dense CF estimate scales as about $61.7k$\,ms, so the crossover remains near $k^{*}\approx 27$.
+The dense case $k=n$ is where KHVC is about $38\times$ faster.
+That is why a CF-USS 1\,GB experiment is missing: the 2023 CRS does not scale to the $n$ where USS is interesting.
 
-Against payload-only rotation of the same four 1\,GB files, KHVC-USS KeyUp is measured at 404\,s and 4240\,B, including the Ring-LWR body scan.
+Against payload-only rotation of the same four 1\,GB files, KHVC-USS KeyUp is measured at 254\,s and 4240\,B, including the Ring-LWR body scan with cached $a_b$.
 AES re-encrypt is 17.9\,s and 4\,GB on the wire; SHINE0 or RISE on the file bytes is 37 minutes to 4.6 hours.
 Those algebraic rows are extrapolations, not timed runs.
 The USS row is slower than client AES re-encrypt on this machine, but the token is $10^6\times$ smaller than rewriting the bodies, the server does the work, and OF-PTXT is kept.
 
 \begin{table}[htbp]
 \centering
-\caption{KHVC-USS microbenchmarks from \texttt{uss.csv} (Ring-LWR bodies). FileUp wall-clock includes decrypting file $i$, encrypting the replacement, and the all-open of the delta; KeyUp includes rewriting every body.}
+\caption{KHVC-USS microbenchmarks (Ring-LWR bodies, cached $a_b$). FileUp wall-clock includes decrypting file $i$, encrypting the replacement, and the one-hot open of the delta; KeyUp includes rewriting every body.}
 \label{tab:uss}
 \small
 \begin{tabular}{@{}rrrrrrr@{}}
@@ -656,16 +658,17 @@ $n$ & $|m_i|$ & ParGen & Store & Rev & FileUp & KeyUp \\
 \midrule
 8  & 4\,KB   & 3.9\,ms  & 8.0\,ms  & 1.9\,ms  & 4.8\,ms  & 7.5\,ms \\
 32 & 4\,KB   & 7.6\,ms  & 34.5\,ms & 2.0\,ms  & 19.5\,ms & 26.3\,ms \\
-64 & 1\,MB   & 15.9\,ms & 12.3\,s  & 0.17\,s  & 0.40\,s  & 8.72\,s \\
-8  & 100\,MB & 1.9\,ms  & 155\,s   & 12.5\,s  & 90.3\,s  & 322\,s \\
-4  & 1\,GB   & 1.9\,ms  & 402\,s   & 107\,s   & 192\,s   & 404\,s \\
+64 & 1\,MB   & 16.5\,ms & 6.08\,s  & 38\,ms   & 0.15\,s  & 2.22\,s \\
+8  & 100\,MB & 1.6\,ms  & 80.9\,s  & 7.82\,s  & 14.4\,s  & 58.9\,s \\
+4  & 1\,GB   & 1.0\,ms  & 425\,s   & 79.7\,s  & 192\,s   & 254\,s \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 Store, Rev, FileUp, and KeyUp all scale with total payload bytes under the Ring-LWR DEM.
-KeyUp of four 1\,GB files is 404\,s: the DEM scan dominates, and the token is 4240 bytes independent of $n$ and of $|m|$.
-The extra integrity work is an FK20 of length $n$, not a scan of other plaintexts.
+KeyUp of four 1\,GB files is 254\,s: the DEM scan dominates, and the token is 4240 bytes independent of $n$ and of $|m|$.
+Caching $a_b$ removes the previous rebuild tax (404\,s end-to-end with on-the-fly NTT).
+The extra integrity work for a one-file FileUp is the one-hot open of Lemma~\ref{lem:onehot}, not a scan of other plaintexts.
 
 \paragraph{Honest costs.}
 Our FK20 uses projective $\GG_1$ arithmetic without a dedicated Pippenger MSM for the Toeplitz step; at $n<1024$ it loses to the na\"ive loop in Table~\ref{tab:hvc}.
@@ -688,7 +691,7 @@ That is why this USS instantiation uses KZG.
 
 UE: BLMR, RISE~\cite{LT18}, ReCrypt~\cite{EPRS17}, SHINE~\cite{SHINE}, nested AES and an RLWE KH-PRF~\cite{BDGJ20}.
 That paper already notes that a Ring-LWR almost key-homomorphic PRF exists and moves to RLWE to widen the noise budget; with a 128-update cap the Ring-LWR pad is enough, and Section~\ref{sec:eval} measures it.
-USS~\cite{CGLT23} is the integrity-aware combination; this paper is its first linear-SRS instantiation.
+USS~\cite{CGLT23} is the integrity-aware combination and already states that the DEM may be any IND-CPA UE; this paper is its first linear-SRS instantiation with a measured large-file DEM.
 Cryptoperiods are NIST's~\cite{NIST57}, not a new UE definition.
 
 \section{Conclusion}
@@ -697,8 +700,8 @@ KHVC removes the quadratic CRS that blocked the 2023 USS at realistic $n$ (opera
 Position hiding is statistical, up to an $n/p$ setup event.
 Body confidentiality and body update are Ring-LWR in the random oracle: IND-CPA for a fresh body and for a body after at most $127$ updates.
 OF-PTXT does not need the DEM to be authenticated, and it holds if the DEM secret leaks.
-Sparse FileUp favours Catalano--Fiore until about $2.6\log_2 n$ slots change.
-On four 1\,GB files end-to-end KeyUp is 404\,s with a 4240-byte token.
+One-hot FileUp openings bring a single-slot update to 194\,ms at $n=1024$ (about $3\times$ the Catalano--Fiore sparse estimate).
+On four 1\,GB files end-to-end KeyUp is 254\,s with a 4240-byte token and cached $a_b$ NTTs.
 Generic-lattice estimation of this Ring-LWR point puts the cheapest finished attack near $2^{319}$, above the $2^{128}$ line, without using the ring.
 
 \begin{thebibliography}{99}

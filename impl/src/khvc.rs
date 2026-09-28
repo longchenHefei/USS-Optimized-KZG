@@ -141,6 +141,36 @@ impl Khvc {
             .collect()
     }
 
+    /// All openings of a one-hot vector with value `delta` at slot `i` and hiding `r`.
+    ///
+    /// For `j ≠ i` uses the closed form
+    /// `Λ_j = Δ·(ω^i/n)·(W_i − W_j)/(ω^i − ω^j) + r·W_j` with precomputed `W_*`.
+    /// Slot `i` is one synthetic division + MSM (still `O(n)` group ops, no FK20).
+    pub fn open_one_hot(&self, i: usize, delta: Fr, r: Fr) -> Vec<Opening> {
+        assert!(i < self.n);
+        let n_inv = Fr::from(self.n as u64).inverse().unwrap();
+        let wi = self.omegas[i];
+        let scale = delta * wi * n_inv;
+        let wi_open = self.z_openings[i];
+
+        let mut values = vec![Fr::from(0u64); self.n];
+        values[i] = delta;
+        let coeffs = self.coeffs_of(&values, r);
+        let open_i = Opening(self.open_coeffs(i, &coeffs, delta));
+
+        let mut out = Vec::with_capacity(self.n);
+        for j in 0..self.n {
+            if j == i {
+                out.push(open_i);
+                continue;
+            }
+            let denom = (wi - self.omegas[j]).inverse().unwrap();
+            let partial = (wi_open - self.z_openings[j]) * denom;
+            out.push(Opening(partial * scale + self.z_openings[j] * r));
+        }
+        out
+    }
+
     pub fn verify(&self, c: Commitment, value: Fr, i: usize, opening: Opening) -> bool {
         let g1 = G1Projective::generator();
         let lhs = Bls12_381::pairing(c.0 - g1 * value, G2Projective::from(self.g2));
@@ -206,6 +236,7 @@ fn compute_z_openings(n: usize, srs: &[G1Projective], omega: Fr) -> Vec<G1Projec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ark_std::rand::RngCore;
 
     #[test]
     fn commit_open_verify() {
@@ -245,5 +276,28 @@ mod tests {
         let (c3, r3) = khvc.rerand(c1, &mut rng);
         let pi3 = khvc.open(1, &v1, r1 + r3);
         assert!(khvc.verify(c3, v1[1], 1, pi3));
+    }
+
+    #[test]
+    fn open_one_hot_matches_open_all() {
+        let mut rng = ark_std::test_rng();
+        for n in [4usize, 8, 16, 64] {
+            let khvc = Khvc::setup(n, &mut rng);
+            for _ in 0..8 {
+                let i = (rng.next_u32() as usize) % n;
+                let delta = Fr::rand(&mut rng);
+                let r = Fr::rand(&mut rng);
+                let mut values = vec![Fr::from(0u64); n];
+                values[i] = delta;
+                let c = khvc.commit(&values, r);
+                let sparse = khvc.open_one_hot(i, delta, r);
+                let dense = khvc.open_all_naive(&values, r);
+                for j in 0..n {
+                    assert_eq!(sparse[j].0, dense[j].0, "n={n} i={i} j={j}");
+                    let y = if j == i { delta } else { Fr::from(0u64) };
+                    assert!(khvc.verify(c, y, j, sparse[j]));
+                }
+            }
+        }
     }
 }

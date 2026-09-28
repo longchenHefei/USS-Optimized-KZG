@@ -3,6 +3,9 @@
 //! The DEM key is one Ring-LWR secret for the epoch. KeyUp sends Δ = s' − s and the
 //! server adds F_Δ to every body. Openings stay under RISE so FileUp/KeyUp can
 //! update them homomorphically. Plaintext integrity is the stub, not a MAC on the DEM.
+//!
+//! FileUp openings use the one-hot closed form (`Khvc::open_one_hot`). KeyUp reuses
+//! cached public `a_b` NTTs stored with each file (not secret; rebuildable from tweak).
 
 use crate::khvc::{hash_to_fr, Commitment, Khvc, Opening};
 use crate::rise::{rise_ct_bytes, rise_dec, rise_enc, rise_hom, rise_next, rise_upd, RiseCt, RisePk, RiseSk};
@@ -30,6 +33,8 @@ pub struct FileRecord {
     /// Ring-LWR ciphertext of ν ‖ file, one `u16` per coefficient (value in `0..p`).
     pub body: Vec<u16>,
     pub body_len: usize,
+    /// Cached twisted NTT of each public `a_b`. Rebuildable from `tweak`; speeds KeyUp/Rev.
+    pub a_ntt: Vec<Vec<u64>>,
     pub proof_ct: RiseCt,
 }
 
@@ -61,28 +66,29 @@ fn pack(nu: &[u8; 32], file: &[u8]) -> Vec<u8> {
     inner
 }
 
-fn body_of(tweak: &[u8; 16], dem: &Sk, msg: &[u8]) -> (Vec<u16>, usize) {
+fn body_of(tweak: &[u8; 16], dem: &Sk, msg: &[u8]) -> (Vec<u16>, usize, Vec<Vec<u64>>) {
     let nblocks = msg.len().div_ceil(rlwr_ue::BLOCK);
     let mut y = Vec::with_capacity(nblocks * rlwr_ue::N);
+    let mut a_ntt = Vec::with_capacity(nblocks);
     for b in 0..nblocks {
         let a = a_ntt_block(tweak, b);
         let start = b * rlwr_ue::BLOCK;
         let end = (start + rlwr_ue::BLOCK).min(msg.len());
         y.extend(enc_block(&a, dem, &msg[start..end]));
+        a_ntt.push(a);
     }
-    (y, msg.len())
+    (y, msg.len(), a_ntt)
 }
 
-fn open_body(tweak: &[u8; 16], dem: &Sk, y: &[u16], len: usize) -> Vec<u8> {
+fn open_body(a_ntt: &[Vec<u64>], dem: &Sk, y: &[u16], len: usize) -> Vec<u8> {
     let mut msg = Vec::with_capacity(len);
     let nblocks = y.len() / rlwr_ue::N;
     for b in 0..nblocks {
         if msg.len() >= len {
             break;
         }
-        let a = a_ntt_block(tweak, b);
         let need = (len - msg.len()).min(rlwr_ue::BLOCK);
-        msg.extend(dec_block(&a, dem, &y[b * rlwr_ue::N..], need));
+        msg.extend(dec_block(&a_ntt[b], dem, &y[b * rlwr_ue::N..], need));
     }
     msg
 }
@@ -91,6 +97,7 @@ pub struct StagedFile {
     tweak: [u8; 16],
     body: Vec<u16>,
     body_len: usize,
+    a_ntt: Vec<Vec<u64>>,
     h: Fr,
 }
 
@@ -103,8 +110,14 @@ pub fn stage_file<R: RngCore>(dem: &Sk, file: &[u8], rng: &mut R) -> StagedFile 
     pre.extend_from_slice(&nu);
     let h = hash_to_fr(&pre);
     let packed = pack(&nu, file);
-    let (body, body_len) = body_of(&tweak, dem, &packed);
-    StagedFile { tweak, body, body_len, h }
+    let (body, body_len, a_ntt) = body_of(&tweak, dem, &packed);
+    StagedFile {
+        tweak,
+        body,
+        body_len,
+        a_ntt,
+        h,
+    }
 }
 
 pub fn seal<R: RngCore>(pp: &UssPp, sk: &UssSk, staged: Vec<StagedFile>, rng: &mut R) -> Repository {
@@ -121,6 +134,7 @@ pub fn seal<R: RngCore>(pp: &UssPp, sk: &UssSk, staged: Vec<StagedFile>, rng: &m
             tweak: s.tweak,
             body: s.body,
             body_len: s.body_len,
+            a_ntt: s.a_ntt,
             proof_ct: rise_enc(sk.rise_pk, openings[i].0, rng),
         })
         .collect();
@@ -136,7 +150,7 @@ pub fn store<R: RngCore>(pp: &UssPp, sk: &UssSk, files: &[Vec<u8>], rng: &mut R)
 
 pub fn retrieve(pp: &UssPp, sk: &UssSk, repo: &Repository, i: usize) -> Option<Vec<u8>> {
     let rec = &repo.files[i];
-    let inner = open_body(&rec.tweak, &sk.dem, &rec.body, rec.body_len);
+    let inner = open_body(&rec.a_ntt, &sk.dem, &rec.body, rec.body_len);
     if inner.len() < 32 {
         return None;
     }
@@ -163,7 +177,7 @@ pub fn file_up<R: RngCore>(
     rng: &mut R,
 ) -> usize {
     let rec = &repo.files[i];
-    let inner = open_body(&rec.tweak, &sk.dem, &rec.body, rec.body_len);
+    let inner = open_body(&rec.a_ntt, &sk.dem, &rec.body, rec.body_len);
     let old_nu = &inner[..32];
     let old_file = &inner[32..];
     let mut pre_old = old_file.to_vec();
@@ -176,12 +190,13 @@ pub fn file_up<R: RngCore>(
     pre_new.extend_from_slice(&new_ri);
     let h_new = hash_to_fr(&pre_new);
 
-    let mut delta_vec = vec![Fr::from(0u64); pp.khvc.n];
-    delta_vec[i] = h_new - h_old;
+    let delta_val = h_new - h_old;
     let r_delta = Fr::rand(rng);
+    let mut delta_vec = vec![Fr::from(0u64); pp.khvc.n];
+    delta_vec[i] = delta_val;
     let c_delta = pp.khvc.commit(&delta_vec, r_delta);
     repo.stub = Khvc::com_hom(repo.stub, c_delta);
-    let openings_delta = pp.khvc.open_all(&delta_vec, r_delta);
+    let openings_delta = pp.khvc.open_one_hot(i, delta_val, r_delta);
     for j in 0..pp.khvc.n {
         let enc_delta = rise_enc(sk.rise_pk, openings_delta[j].0, rng);
         repo.files[j].proof_ct = rise_hom(repo.files[j].proof_ct, enc_delta);
@@ -190,10 +205,11 @@ pub fn file_up<R: RngCore>(
     let mut tweak = [0u8; 16];
     rng.fill_bytes(&mut tweak);
     let packed = pack(&new_ri, new_file);
-    let (body, body_len) = body_of(&tweak, &sk.dem, &packed);
+    let (body, body_len, a_ntt) = body_of(&tweak, &sk.dem, &packed);
     repo.files[i].tweak = tweak;
     repo.files[i].body = body;
     repo.files[i].body_len = body_len;
+    repo.files[i].a_ntt = a_ntt;
 
     new_file.len() + 32 + 16 + rise_ct_bytes()
 }
@@ -223,11 +239,12 @@ pub fn key_up<R: RngCore>(
         repo.files[j].proof_ct = rise_upd(tk, repo.files[j].proof_ct, rng);
         let enc0 = rise_enc(new.rise_pk, openings0[j].0, rng);
         repo.files[j].proof_ct = rise_hom(repo.files[j].proof_ct, enc0);
-        let nblocks = repo.files[j].body.len() / rlwr_ue::N;
+        let file = &mut repo.files[j];
+        let nblocks = file.body.len() / rlwr_ue::N;
+        debug_assert_eq!(file.a_ntt.len(), nblocks);
         for b in 0..nblocks {
-            let a = a_ntt_block(&repo.files[j].tweak, b);
             let start = b * rlwr_ue::N;
-            upd_block(&a, &delta, &mut repo.files[j].body[start..start + rlwr_ue::N]);
+            upd_block(&file.a_ntt[b], &delta, &mut file.body[start..start + rlwr_ue::N]);
         }
     }
     // RISE header: Δ (32) + Y' (48) + ρ0 (32) + the 32-byte counter word = 144.
@@ -260,6 +277,7 @@ mod tests {
         let mut repo = store(&pp, &sk, &files, &mut rng);
         for i in 0..n {
             assert_eq!(retrieve(&pp, &sk, &repo, i).unwrap(), files[i]);
+            assert!(!repo.files[i].a_ntt.is_empty());
         }
         let newf = b"updated-file-1".to_vec();
         file_up(&pp, &sk, &mut repo, 1, &newf, &mut rng);

@@ -115,7 +115,7 @@ fn bench_hvc(rows: &mut Vec<String>, smoke: bool) {
         ));
         assert!(khvc.verify(c, values[1], 1, all[1]));
 
-        // sparse FileUp-style: k changed positions, still all-open of a sparse poly
+        // FileUp openings: k=1 uses one-hot closed form; denser k still FK20/naive all-open.
         for k in [1usize, 8, 64] {
             if k > n {
                 continue;
@@ -126,9 +126,24 @@ fn bench_hvc(rows: &mut Vec<String>, smoke: bool) {
             }
             let rd = Fr::rand(&mut rng);
             let t0 = Instant::now();
-            let _ = khvc.open_all(&delta, rd);
+            if k == 1 {
+                let _ = khvc.open_one_hot(0, delta[0], rd);
+            } else {
+                let _ = khvc.open_all(&delta, rd);
+            }
             rows.push(format!(
                 "hvc,KHVC,{n},{k},fileup_all_open,{:.4},{},k={k}",
+                ms(t0.elapsed()),
+                48 * n
+            ));
+        }
+        // Dense all-open baseline for FileUp k=n (FK20 path when n≥1024).
+        {
+            let rd = Fr::rand(&mut rng);
+            let t0 = Instant::now();
+            let _ = khvc.open_all(&values, rd);
+            rows.push(format!(
+                "hvc,KHVC,{n},{n},fileup_all_open,{:.4},{},k={n}",
                 ms(t0.elapsed()),
                 48 * n
             ));

@@ -62,6 +62,34 @@ In this paper, we bridge the gap between theoretical USS definitions and real-wo
     \item \textbf{Complete Implementation \& End-to-End Evaluation:} 
     We provide a production-grade Rust implementation (\texttt{uss-khvc}) of the complete USS framework alongside existing cryptographic baselines using Type-3 BLS12-381 pairings. Benchmarked on an Apple M5 Pro, our Ring-LWR DEM achieves a re-encryption throughput of $32.6\,\text{MB/s}$ on $1\,\text{MB}$ payload blocks ($254\,\text{s}$ total key rotation time for four $1\,\text{GB}$ files with a compact $4.2\,\text{KB}$ token), demonstrating for the first time that integrity-aware, key-updatable storage can scale efficiently to gigabyte-sized cloud databases.
 \end{itemize}
+
+
+\subsection{Technical Overview}
+\label{sec:intro_technique_overview}
+
+To resolve the scalability and computational bottlenecks of prior USS schemes, we overhaul both the homomorphic commitment layer and the bulk data encryption layer. Below, we highlight the core technical ideas behind our key-homomorphic vector commitment ($\mathsf{KHVC}$) and high-throughput DEM instantiation.
+
+\paragraph{Linear-SRS Homomorphic Vector Commitment ($\mathsf{KHVC}$).}
+The primary bottleneck in CGLT23~\cite{CGLT23} stems from Catalano--Fiore HVC, which relies on a quadratic $O(n^2)$ SRS to support position-hiding updates. 
+To achieve $O(n)$ SRS complexity, we construct $\mathsf{KHVC}$ over asymmetric pairing groups $\mathbb{G}_1, \mathbb{G}_2, \mathbb{G}_T$ equipped with a Type-3 bilinear map $e: \mathbb{G}_1 \times \mathbb{G}_2 \to \mathbb{G}_T$. 
+Given a message vector $\mathbf{m} = (m_1, \dots, m_n) \in \mathbb{F}_p^n$, the commitment is computed as $\mathcal{C} = g_1^{f(\tau)} \in \mathbb{G}_1$, where $f(X) = \sum_{i=1}^n m_i X^i$ is the polynomial encoding $\mathbf{m}$, and $\tau \in \mathbb{F}_p^*$ is the secret trapdoor. Crucially, we enforce an auxiliary state $\mathsf{aux} = \rho \in \mathbb{F}_p^*$ that remains constant-size ($O(1)$) and independent of the vector dimension $n$.
+Key updates require computing linear transformations over commitment elements. By structuring openings as standard KZG evaluation proofs $\pi_i = g_1^{(f(\tau) - m_i)/(\tau - i)}$ and blinding them with the client's ephemeral scalar $\rho$, $\mathsf{KHVC}$ guarantees that single-slot update tokens remain random group elements in $\mathbb{G}_1$. This achieves statistical position hiding up to an $n/p$ setup event, matching the security bound of $O(n^2)$ predecessors.
+
+\paragraph{Fast Single-Slot Evaluation via One-Hot Closed Forms.}
+During a $\textsf{FileUp}$ operation at slot $i$, updating a single position in a vector of dimension $n$ naive KZG evaluation requires re-computing quotient polynomials via \cite{FK20}, incurring $O(n \log n)$ group operations. 
+We observationally bypass this global polynomial division by leveraging the sparsity of the update vector $\mathbf{\Delta} = (0, \dots, \Delta_i, \dots, 0)$. 
+We derive a closed-form formula for the one-hot opening update (\texttt{open\_one\_hot}): the update proof simplifies to a single group exponentiation $\pi_i' = \pi_i \cdot (g_{1, i-1})^{\Delta_i}$ using pre-computed basis elements $g_{1, k} = g_1^{\tau^k}$. This reduces the single-slot update latency to $194\,\text{ms}$ at $n = 1024$, running nearly $3\times$ faster than sparse Catalano--Fiore updates.
+
+\paragraph{High-Throughput Ring-LWR DEM with NTT Caching.}
+For payload confidentiality, prior works often assume authenticated updatable encryption (AE-UE). However, because USS guarantees out-of-date plaintext authenticity ($\mathrm{OF\text{-}PTXT}$) directly via the $\mathsf{KHVC}$ stub, the DEM requires only $\mathrm{IND\text{-}CPA}$ security.
+Instead of using RLWE (which introduces Gaussian noise accumulation) or standard LWR (which lacks algebraic structure for large files), we instantiate a Key-Homomorphic PRF (KH-PRF) over the polynomial ring $\mathcal{R}_q = \mathbb{Z}_q[X]/(X^N + 1)$ using Rounding (Ring-LWR):
+\begin{equation}
+F_{\mathbf{k}}(x) = \left\lfloor \frac{p}{q} \cdot (\mathbf{a}_x \cdot \mathbf{k}) \right\rceil \pmod p,
+\end{equation}
+where $\mathbf{a}_x \leftarrow \mathsf{RO}(x) \in \mathcal{R}_q$. Under a practical $t \le 127$ update bound, the rounding error does not overflow the modulus $q$, eliminating RLWE noise growth while delivering proven $2^{319}$ generic lattice security.
+To maximize re-encryption speed on gigabyte-scale datasets, we transform the public random-oracle polynomials $\mathbf{a}_x$ into Number Theoretic Transform (NTT) domain and cache them in memory. Furthermore, we strip superfluous headers from body ciphertexts, enabling $32.6\,\text{MB/s}$ stream re-encryption and completing full $4 \times 1\,\text{GB}$ file rotations in $254\,\text{s}$.
+
+
 \subsection{Related Work}
 \label{sec:intro_related_work}
 

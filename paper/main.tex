@@ -127,7 +127,7 @@ Notice that verification requires only $[1]_2$ and $[\tau]_2$, eliminating the n
 \paragraph{RISE Updatable Encryption~\cite{LT18}.}
 $\mathsf{RISE}$ is an ElGamal-style Updatable Encryption ($\mathsf{UE}$) scheme over a prime-order group:
 \begin{itemize}
-    \item $\mathsf{Enc}_k(M) = (rY,\, rG + M)$ under public key $Y = kG$ and ephemeral scalar $r \leftarrow \mathbb{F}_p$.
+    \item $\mathsf{Enc}_Y(M) = (rY,\, rG + M)$ under public key $Y = kG$ and ephemeral scalar $r \leftarrow \mathbb{F}_p$ (encryption uses only $Y$).
     \item Given a transition token $(\Delta = k'/k,\, Y' = k'G)$ and fresh $r'\leftarrow\mathbb{F}_p$, the server updates $C=(C_1,C_2)$ to
     \[
       C' \;=\; \bigl(\Delta\cdot C_1 + r'Y',\;\; C_2 + r'G\bigr).
@@ -656,7 +656,7 @@ For each $i \in \{1, \dots, n\}$:
 \begin{enumerate}
     \item Sample 256-bit nonce $\nu_i$ and fresh $\mathsf{tweak}_i$. Compute commitment $h_i = \mathsf{COM}(m_i; \nu_i) \in \mathbb{F}_p$.
     \item Encrypt payload $\nu_i \parallel m_i$ as $C_i^{\mathrm{UE}} \gets \mathsf{UE.Enc}(s, \mathsf{tweak}_i, \nu_i \parallel m_i)$ and cache $a_b$ NTTs.
-    \item Compute $\mathsf{KHVC}$ opening proof $\Lambda_i$ for $(h_1, \dots, h_n)$, and RISE-encrypt it: $E_i = \mathsf{RISE.Enc}_k(\Lambda_i)$.
+    \item Compute $\mathsf{KHVC}$ opening proof $\Lambda_i$ for $(h_1, \dots, h_n)$, and RISE-encrypt it: $E_i = \mathsf{RISE.Enc}_Y(\Lambda_i)$.
 \end{enumerate}
 Sample fresh scalar $\rho \in \mathbb{F}_p$. Compute $(C, \rho) \gets \mathsf{KHVC.Com}(\mathsf{pp}, (h_1, \dots, h_n))$. The client keeps local stub $\mathsf{stub} = C$, discards $\rho$, and sends repository $\mathsf{repo} = (\{E_i\}, \{C_i^{\mathrm{UE}}\}, \{\mathsf{tweak}_i\})$ to the server.
 
@@ -686,7 +686,7 @@ The server:
 Let $\mathsf{sk}=(k, s)$ and $\mathsf{sk}'=(k', s')$. The client sends token $\mathsf{token} = (\Delta_{\mathrm{R}} = k'/k, Y' = k'g_1, \rho_0 \in \mathbb{F}_p, \Delta = s' - s)$.
 The server:
 \begin{enumerate}
-    \item Updates RISE headers using $\Delta_{\mathrm{R}}$ and adds $\mathsf{RISE.Enc}_{k'}(\rho_0 \cdot W_j)$ to each opening.
+    \item Updates RISE headers using $\Delta_{\mathrm{R}}$ and adds $\mathsf{RISE.Enc}_{Y'}(\rho_0 \cdot W_j)$ to each opening.
     \item Updates local stub: $\mathsf{stub}' = \mathsf{stub} + \rho_0 [Z(\tau)]_1$.
     \item Re-encrypts payload bodies via $\mathsf{UE.ReEnc}(\Delta, C_i^{\mathrm{UE}})$ using cached $a_b$ NTTs.
 \end{enumerate}
@@ -758,7 +758,7 @@ If $\mathcal{A}$ queries $H$ on $(m_b^\star\Vert\nu_{i^\star})$ before $\nu_{i^\
 Since $\nu_{i^\star}$ has $256$ bits of entropy, this abort probability is at most $\mathsf{Adv}^{\mathsf{RO\text{-}guess}}_{\mathcal{A}}$ (negligible under standard query bounds).
 
 \medskip\noindent\textbf{Game $H_2$ (hide RISE openings).}
-Replace every RISE ciphertext $E_j$ that opens a $\mathsf{KHVC}$ proof depending on $h_{i^\star}$---in particular $E_{i^\star}$ and, after FileUp/KeyUp, every opening that has absorbed a challenge-dependent delta---by $\mathsf{RISE.Enc}_k(U_j)$ for independent uniform $U_j\in\GG_1$.
+Replace every RISE ciphertext $E_j$ that opens a $\mathsf{KHVC}$ proof depending on $h_{i^\star}$---in particular $E_{i^\star}$ and, after FileUp/KeyUp, every opening that has absorbed a challenge-dependent delta---by $\mathsf{RISE.Enc}_Y(U_j)$ for independent uniform $U_j\in\GG_1$.
 A standard hybrid over the finitely many such openings reduces to RISE IND-ENC in $\GG_1$, which holds under SXDH~\cite{LT18}.
 Call the resulting adversary $\mathcal{B}_1$.
 
@@ -806,12 +806,12 @@ Replace $h'$ by a uniform $\FF_p$ element, programming $H(m_b'\Vert\nu')=h'$ unl
 The hop is identical to $H_0$ unless the RO-guess event of Lemma~\ref{lem:ind-dd-up} occurs.
 
 \paragraph*{Game $H_2$ (hide openings and body).}
-Replace every $\mathsf{RISE.Enc}_k(\Lambda_{\delta,j})$ by an encryption of a uniform $\GG_1$ element (RISE IND-ENC / SXDH; hybrid over $n$ openings), and replace the fresh body by uniform $R_p$ elements.
+Replace every $\mathsf{RISE.Enc}_Y(\Lambda_{\delta,j})$ by an encryption of a uniform $\GG_1$ element (RISE IND-ENC / SXDH; hybrid over $n$ openings), and replace the fresh body by uniform $R_p$ elements.
 The new tweak ensures that every $a_b=H(\mathsf{tweak}'\Vert b)$ is a fresh oracle string, so the body hop is Ring-LWR under the current $s$ (Remark~\ref{rem:dem-rom}).
 The one-hot closed form of Lemma~\ref{lem:onehot} produces the same opening group elements as a dense all-open; the reduction does not depend on which algorithm computes them.
 
 \paragraph*{Game $H_3$ (hide the updated stub).}
-The updated stub is $C'=C\oplus C_\delta$ with $C_\delta$ committing to a one-hot vector whose only nonzero entry is the (already uniform) $h'-h_{i^\star}$.
+The updated stub is $C'=C+C_\delta$ with $C_\delta$ committing to a one-hot vector whose only nonzero entry is the (already uniform) $h'-h_{i^\star}$.
 Apply Theorem~\ref{thm:hide} to $C'$ and to the openings of all slots except $i^\star$: the view is statistically independent of $b$ up to an $n/p$ setup failure.
 
 The same Type-3 pairing check as in Lemma~\ref{lem:ind-dd-up} replaces any symmetric-group extraction step of~\cite{CGLT23}.
@@ -835,7 +835,7 @@ We follow~\cite[Thm.~5]{CGLT23}, separating header/stub unlinkability from body 
 \paragraph*{Headers and stub.}
 An honest KeyUp publishes $(\Delta_{\mathrm{R}}=k'/k,\,Y'=k'g_1,\,\rho_0)$ and the server
 (i)~applies RISE update with token $\Delta_{\mathrm{R}}$ to every opening ciphertext, then
-(ii)~adds $\mathsf{RISE.Enc}_{k'}(\rho_0 W_j)$ to opening $j$ and $[\rho_0 Z(\tau)]_1$ to the stub.
+(ii)~adds $\mathsf{RISE.Enc}_{Y'}(\rho_0 W_j)$ to opening $j$ and $[\rho_0 Z(\tau)]_1$ to the stub.
 Step~(i) is exactly the RISE rand-IND-UPD game in $\GG_1$ (SXDH)~\cite{LT18}: after the update, each opening ciphertext is distributed as a fresh encryption under $k'$ of the same $\GG_1$ message.
 Step~(ii) is a public $\mathsf{KHVC}$ rerandomization: adding $\rho_0 Z$ does not change any evaluation on $\Omega$, and by Theorem~\ref{thm:hide} (applied to a zero-message vector with blinding $\rho_0$) the updated stub together with the updated openings is statistically independent of the pre-KeyUp blinding, up to an $n/p$ setup failure.
 A hybrid that first replaces RISE updates by fresh encryptions under $k'$, then replaces the stub/opening rerandomization by an independent fresh $\mathsf{KHVC}$ commitment to the same hash vector, is therefore indistinguishable from the real KeyUp header except for $\mathsf{Adv}^{\mathsf{RISE\text{-}UPD}}_{\mathcal{B}_1}+n/p$.
@@ -1053,7 +1053,7 @@ $k$ Slots & CF-HVC (Estimated) & KHVC (Measured) & Algorithmic Source \\
 \paragraph{Partial File Updates (\textsf{FileUp}).}
 As shown in Table~\ref{tab:fileup-k}, for single-slot updates ($k=1$), our one-hot evaluation proof (Lemma~\ref{lem:onehot}) cuts opening latency from $1.62$\,s (using FK20) down to $194$\,ms.
 Relative to CF-HVC, however, $k=1$ and $k=8$ favor the baseline's estimated Open+Ver cost ($\approx 62$\,ms and $\approx 0.49$\,s): a KHVC one-hot FileUp must refresh all $n-1$ off-slot openings ($\Theta(n)$ scalar multiplications in $\mathbb{G}_1$), whereas the CF column reports only a single-slot Open+Ver estimate and does not charge a full server-side opening refresh.
-KHVC pulls ahead once $k$ is large enough that CF's per-slot work accumulates: the measured crossover is $k^*\approx 27$, and at $k=n=1024$ KHVC is $38\times$ faster ($1.67$\,s vs.\ $63.1$\,s).
+KHVC pulls ahead once $k$ is large enough that CF's per-slot work accumulates: the estimated crossover (KHVC measured vs.\ CF Open+Ver extrapolation) is $k^*\approx 27$, and at $k=n=1024$ KHVC is $38\times$ faster ($1.67$\,s vs.\ $63.1$\,s).
 For dense updates ($k\ge 8$) FK20 keeps KHVC near-constant at $\approx 1.67$\,s.
 
 \begin{table}[htbp]
@@ -1218,9 +1218,6 @@ ICALP 2018.
 
 \bibitem{ReCryptcode}
 \url{https://github.com/samscott89/ReCrypt}
-
-\bibitem{BDGJcode}
-\url{https://github.com/moshih/UpdateableEncryption_Code}
 
 \end{thebibliography}
 

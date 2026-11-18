@@ -418,8 +418,7 @@ is negligible in $\lambda$, where the experiment proceeds as follows.
         \end{enumerate}
 \end{enumerate}
 IND-UPD-CPA is the unlinkability game of~\cite{LT18}: an updated ciphertext hides which of two equal-length prior ciphertexts it came from, even under adaptive corruptions outside the trivial-win region.
-(Our Ring-LWR $\mathsf{UE.ReEnc}$ is deterministic, so condition~(c) is enforced by the experiment rather than being vacuous.
-RISE updates are randomized, for which~(c) would be vacuous.)
+(The USS body update of Section~\ref{sec:ue} is randomized by an ephemeral mask $\delta$ that is not part of the token, so the public-token equality test is unavailable and condition~(c) is vacuous for that update. A deterministic $\mathsf{ReEnc}$ would instead have to rely on condition~(c).)
 \end{definition}
 
 \begin{remark}[DEM specialization used in USS]
@@ -440,23 +439,25 @@ Output $\mathsf{pp} = (N, q, p, H)$.
 Sample a uniform secret $s \leftarrow R_q$.
 
 \paragraph{$\mathsf{UE.Enc}(s, \mathsf{tweak}, m)$.}
-For each block index $b$ of message $m \in R_p$:
+Sample a file mask $\sigma\leftarrow R_q$ and a header public key. For each block index $b$:
 \begin{enumerate}
     \item Compute $a_b = H(\mathsf{tweak} \parallel b) \in R_q$.
-    \item Compute pseudo-random pad $F_s(b) = \left\lfloor \frac{p}{q} (a_b \cdot s) \right\rceil \in R_p$.
-    \item Output ciphertext block $c_b = m_b + F_s(b) \pmod p$.
+    \item Compute $F_{s+\sigma}(b) = \left\lfloor \frac{p}{q} (a_b \cdot (s+\sigma)) \right\rceil \in R_p$.
+    \item Output $c_b = m_b + F_{s+\sigma}(b) \pmod p$.
 \end{enumerate}
-In implementation, $a_b$ is computed in the twisted NTT domain and cached per file block alongside $\mathsf{tweak}$.
+Store $\sigma$ in one RLWE ciphertext $h=\mathsf{Enc}_{\mathsf{pk}}(\sigma)$ under a client header key (Goldilocks modulus $2^{64}-2^{32}+1$, message in the high bits). The $a_b$ NTTs are cached with the file. $h$ is $16\,\text{KB}$, once per file.
 
-\paragraph{$\mathsf{UE.Dec}(s, \mathsf{tweak}, c_b)$.}
-Recompute $a_b = H(\mathsf{tweak} \parallel b)$, evaluate $F_s(b) = \left\lfloor \frac{p}{q} (a_b \cdot s) \right\rceil \in R_p$, and recover $m_b = c_b - F_s(b) \pmod p$.
+\paragraph{$\mathsf{UE.Dec}(s, \mathsf{tweak}, (c,h))$.}
+Decrypt $h$ to $\sigma$, recompute $F_{s+\sigma}(b)$, and recover $m_b = c_b - F_{s+\sigma}(b) \pmod p$.
 
-\paragraph{$\mathsf{UE.ReEnc}(\Delta, c_b)$.}
-Given the key transition token $\Delta = s' - s \in R_q$ and cached NTT of $a_b$:
+\paragraph{$\mathsf{UE.ReEnc}(\Delta, \mathsf{ksk}, (c,h))$.}
+The token carries $\Delta=s'-s$ and a key-switching key from the old header key to the new one. It does not carry the server's fresh coins.
 \begin{enumerate}
-    \item Evaluate $F_\Delta(b) = \left\lfloor \frac{p}{q} (a_b \cdot \Delta) \right\rceil \in R_p$.
-    \item Homomorphically update the ciphertext: $c'_b = c_b + F_\Delta(b) \pmod p$.
+    \item Sample an ephemeral $\delta\leftarrow R_q$ and erase it after the update.
+    \item Set $c'_b = c_b + F_{\Delta+\delta}(b) \pmod p$. One ring product per block, the same cost as adding $F_\Delta$.
+    \item Replace the header by $\mathsf{KeySwitch}(\mathsf{ksk}, h)+\mathsf{Enc}_{\mathsf{pk}'}(\delta)$.
 \end{enumerate}
+Then $c'_b = m_b + F_{s'+\sigma+\delta}(b) + e_b$ with a fresh rounding error $\|e_b\|_\infty\le 1$, and the header decrypts to $\sigma+\delta$. An observer who has $c$, $c'$, and $\Delta$ obtains $c'-c-F_\Delta(b)=F_\delta(b)+e'$, which is pseudorandom under decisional Ring-LWR whenever $\delta$ stays hidden by the header.
 
 \paragraph{Noise Accumulation and Decryption Bound.}
 Updating directly in $\mathbb{Z}_p$ introduces a rounding error of infinity norm $\Vert{}e\Vert{}_\infty \le 1$ per rotation turn. After $t$ consecutive updates, $\Vert{}e^{(t)}\Vert{}_\infty \le t$. By reserving noise bits in each coefficient encoding, decryption is exact for up to $t \le 127$ updates.
@@ -690,7 +691,7 @@ For each $i \in \{1, \dots, n\}$:
     \item Encrypt payload $\nu_i \parallel m_i$ as $C_i^{\mathrm{UE}} \gets \mathsf{UE.Enc}(s, \mathsf{tweak}_i, \nu_i \parallel m_i)$ and cache $a_b$ NTTs.
     \item Compute $\mathsf{KHVC}$ opening proof $\Lambda_i$ for $(h_1, \dots, h_n)$, and RISE-encrypt it: $E_i = \mathsf{RISE.Enc}_Y(\Lambda_i)$.
 \end{enumerate}
-Sample fresh scalar $\rho \in \mathbb{F}_p$. Compute $(C, \rho) \gets \mathsf{KHVC.Com}(\mathsf{pp}, (h_1, \dots, h_n))$. The client keeps local stub $\mathsf{stub} = C$, discards $\rho$, and sends repository $\mathsf{repo} = (\{E_i\}, \{C_i^{\mathrm{UE}}\}, \{\mathsf{tweak}_i\})$ to the server.
+Sample fresh scalar $\rho \in \mathbb{F}_p$. Compute $(C, \rho) \gets \mathsf{KHVC.Com}(\mathsf{pp}, (h_1, \dots, h_n))$. The client keeps the stub $C$ locally and discards $\rho$. The server receives only $\mathsf{repo} = (\{E_i\}, \{C_i^{\mathrm{UE}}\}, \{h_i^{\mathrm{mask}}\}, \{\mathsf{tweak}_i\})$. In the games below, a value named $\mathsf{sb}$ is a handle for a record the challenger stores; it is not the group element $C$.
 
 \paragraph{$\mathsf{USS.Rev}(\mathsf{pp}, \mathsf{sk}, \mathsf{repo}, i)$.}
 The client downloads $E_i$, $C_i^{\mathrm{UE}}$, and $\mathsf{tweak}_i$. It decrypts $\Lambda_i \gets \mathsf{RISE.Dec}_k(E_i)$, decrypts payload $(\nu_i, m_i) \gets \mathsf{UE.Dec}(s, \mathsf{tweak}_i, C_i^{\mathrm{UE}})$, and recomputes $h_i = \mathsf{COM}(m_i; \nu_i)$. It returns $m_i$ if $\mathsf{KHVC.Ver}(\mathsf{pp}, C, i, h_i, \Lambda_i) = 1$, else $\bot$.
@@ -701,27 +702,27 @@ It sets $\Delta h_i=h'_i-h_i$, samples $\rho_\delta\in\mathbb{F}_p$, and forms
 $C_\delta=[\Delta h_i\,L_{i-1}(\tau)]_1+\rho_\delta[Z(\tau)]_1$ (identifying USS slot $i$ with KHVC index $i-1$).
 It sends the update token
 \[
-\bigl(i,\;\Delta h_i,\;\rho_\delta,\;C_\delta,\;(C_i^{\mathrm{UE}})',\;\mathsf{tweak}'_i\bigr)
+\bigl(i,\;\Delta h_i,\;\rho_\delta,\;C_\delta,\;(C_i^{\mathrm{UE}})',\;h_i',\;\mathsf{tweak}'_i\bigr)
 \]
-of size $O(1)+|m'_i|$ (independent of $n$) to the server.
+of size $O(1)+|m'_i|$ (independent of $n$; the new mask header is $16\,\text{KB}$) to the server. The client sets $\mathsf{stub}\leftarrow\mathsf{stub}+C_\delta$ locally.
 The server:
 \begin{enumerate}
   \item checks that $C_\delta$ equals the public commitment of the one-hot delta $(\Delta h_i,\rho_\delta)$ at index $i-1$;
-  \item updates the stub by $\mathsf{stub}'=\mathsf{stub}+C_\delta$;
   \item recomputes the one-hot openings $\{\Lambda_{\delta,j}\}_j$ via Lemma~\ref{lem:onehot} from the public SRS and $(\Delta h_i,\rho_\delta)$;
   \item freshly RISE-encrypts each $\Lambda_{\delta,j}$ under the public key $Y$ and additively updates $E_j\leftarrow E_j+\mathsf{RISE.Enc}_Y(\Lambda_{\delta,j})$;
-  \item replaces the body of slot $i$ by the fresh UE ciphertext.
+  \item replaces the body and mask header of slot $i$.
 \end{enumerate}
 (The values $\Delta h_i,\rho_\delta$ are sent in the clear so that the server---who holds only $Y$, not $k$---can produce the RISE envelopes locally; revealing the field difference of two hash commitments does not open the payloads, which remain protected by $\mathsf{COM}$ and the UE body.)
 
 \paragraph{$\mathsf{USS.KeyUp}(\mathsf{pp}, \mathsf{sk}, \mathsf{sk}', \mathsf{repo})$.}
-Let $\mathsf{sk}=(k, s)$ and $\mathsf{sk}'=(k', s')$. The client sends token $\mathsf{token} = (\Delta_{\mathrm{R}} = k'/k, Y' = k'g_1, \rho_0 \in \mathbb{F}_p, \Delta = s' - s)$.
-The server:
+Let $\mathsf{sk}=(k, s, \mathsf{sk}_H)$ and $\mathsf{sk}'=(k', s', \mathsf{sk}_H')$. The client samples $\rho_0$ and sends
+$\mathsf{token}=(\Delta_{\mathrm{R}}=k'/k,\; Y'=k'g_1,\; \rho_0,\; \Delta=s'-s,\; \mathsf{ksk})$,
+where $\mathsf{ksk}$ switches the mask header from $\mathsf{sk}_H$ to $\mathsf{sk}_H'$. The client updates its own stub, $\mathsf{stub}\leftarrow\mathsf{stub}+\rho_0[Z(\tau)]_1$. The server:
 \begin{enumerate}
-    \item Updates RISE headers using $\Delta_{\mathrm{R}}$ and adds $\mathsf{RISE.Enc}_{Y'}(\rho_0 \cdot W_j)$ to each opening.
-    \item Updates local stub: $\mathsf{stub}' = \mathsf{stub} + \rho_0 [Z(\tau)]_1$.
-    \item Re-encrypts payload bodies via $\mathsf{UE.ReEnc}(\Delta, C_i^{\mathrm{UE}})$ using cached $a_b$ NTTs.
+    \item Updates RISE openings using $\Delta_{\mathrm{R}}$ and adds $\mathsf{RISE.Enc}_{Y'}(\rho_0 \cdot W_j)$ to each opening.
+    \item Re-encrypts each file by $\mathsf{UE.ReEnc}(\Delta, \mathsf{ksk}, \cdot)$, sampling a fresh $\delta$ per file.
 \end{enumerate}
+The measured token is $266384$ bytes: $\Delta$ ($4096$), the RISE fields and $\rho_0$ and a $32$-byte epoch word ($144$), and a $16$-digit RLWE key-switching key ($262144$). It does not grow with the file size.
 
 \subsection{Security Proofs}
 
@@ -746,16 +747,14 @@ Let $H$ be the random oracle used as $\mathsf{COM}$ and as $a_b=H(\mathsf{tweak}
 A body block is of the form $\mathsf{encode}(\nu\Vert m)+F_s(b)$ with $F_s(b)=\bigl\lfloor(p/q)\,(a_b\cdot s)\bigr\rceil\in R_p$.
 Replacing every block of a challenge body by an independent uniform element of $R_p$ is a standard decisional Ring-LWR hop for the epoch secret $s$: each $a_b$ is a fresh oracle string (fresh $\mathsf{tweak}$, or a previously unused block index), so the rounded products are Ring-LWR samples.
 The same hop applies after KeyUp.
-The server receives $\Delta=s'-s$.
-Since $s'$ is uniform in $R_q$, $\Delta$ is uniform and independent of $s$, and an honestly updated block equals
+The server receives $\Delta=s'-s$ and the header key-switching key, and samples $\delta$ itself.
+An honestly updated block equals
 \[
-\mathsf{encode}(\nu\Vert m)+F_{s'}(b)+e
+\mathsf{encode}(\nu\Vert m)+F_{s'+\sigma+\delta}(b)+e
 \quad\text{with}\quad \|e\|_\infty\le t
 \]
-after $t$ updates.
-For $t\le 127$ the noise pad removes $e$ on decryption, and $e$ is independent of the message bits.
-Distinguishing the updated body from uniform $R_p$ is therefore Ring-LWR under $s'$.
-Seeing both the pre- and post-update bodies does not help beyond evaluating $F_\Delta$, which the server can already compute from the public token $\Delta$ and the public $a_b$.
+after $t$ updates. For $t\le 127$ the noise pad removes $e$.
+The token does not determine $\delta$. Replacing the header by an encryption of an independent mask, then replacing $F_\delta$ by a uniform pad, is RLWE followed by decisional Ring-LWR. After those hops, $c'-c-F_\Delta$ is uniform, so the updated body is not a public function of the old body and the token.
 \end{remark}
 
 \begin{lemma}[IND-DD-UP]
@@ -856,10 +855,11 @@ Any PPT adversary $\mathcal{A}$ against IND-REENC-CPA that triggers at most $t\l
 \mathsf{Adv}^{\mathsf{IND\text{-}REENC\text{-}CPA}}_{\mathcal{A}}
 \le
 \mathsf{Adv}^{\mathsf{RISE\text{-}UPD}}_{\mathcal{B}_1}
++\mathsf{Adv}^{\mathsf{RLWE}}_{\mathcal{B}_H}
 +\mathsf{Adv}^{\mathsf{RLWR}}_{\mathcal{B}_2}
 +\frac{n}{p},
 \]
-where $\mathcal{B}_1$ attacks RISE rand-IND-UPD in $\GG_1$ and $\mathcal{B}_2$ attacks decisional Ring-LWR for the post-update DEM secret.
+where $\mathcal{B}_1$ attacks RISE rand-IND-UPD in $\GG_1$, $\mathcal{B}_H$ attacks RLWE encryption of the per-file mask, and $\mathcal{B}_2$ attacks decisional Ring-LWR for the ephemeral mask $\delta$.
 \end{lemma}
 \begin{proof}
 We follow~\cite[Thm.~5]{CGLT23}, separating header/stub unlinkability from body unlinkability.
@@ -873,15 +873,18 @@ Step~(ii) is a public $\mathsf{KHVC}$ rerandomization: adding $\rho_0 Z$ does no
 A hybrid that first replaces RISE updates by fresh encryptions under $k'$, then replaces the stub/opening rerandomization by an independent fresh $\mathsf{KHVC}$ commitment to the same hash vector, is therefore indistinguishable from the real KeyUp header except for $\mathsf{Adv}^{\mathsf{RISE\text{-}UPD}}_{\mathcal{B}_1}+n/p$.
 
 \paragraph*{Bodies.}
-The DEM token is $\Delta=s'-s\in R_q$.
-The server replaces every body block $c$ by $c+F_\Delta(b)$.
-As in Remark~\ref{rem:dem-rom}, for $t\le 127$ the resulting body equals a fresh encoding under $s'$ plus a message-independent rounding error of infinity norm at most $t$.
-Replacing every updated body by uniform $R_p$ elements is decisional Ring-LWR under $s'$.
-The public $\Delta$ does not help: it is uniform given $s'$, and $F_\Delta$ is already computable by the server.
-This hop is $\mathsf{Adv}^{\mathsf{RLWR}}_{\mathcal{B}_2}$.
+The adversary is given $\Delta$ and $\mathsf{ksk}$, together with the pre-update bodies it stored and the post-update bodies.
+The server's coins $\delta$ are not in the token.
+Replace each mask header by an RLWE encryption of an independent $\sigma^\star$ (semantic security of the header, including the key-switched ciphertext).
+The body difference is then $c'-c=F_{\Delta+\delta}+e$.
+Subtracting the public $F_\Delta$ leaves $F_\delta+e'$, a Ring-LWR sample under the erased secret $\delta$.
+Replace that sample by a uniform element of $R_p$.
+The updated body is then uniform and independent of which candidate repository was rotated, which is the IND-REENC distinguishing bit.
+This hop is $\mathsf{Adv}^{\mathsf{RLWE}}_{\mathcal{B}_H}+\mathsf{Adv}^{\mathsf{RLWR}}_{\mathcal{B}_2}$.
 
 \paragraph*{Challenge bit.}
-After both hops, the post-KeyUp repository (headers, stub, and bodies) is distributed as a fresh Store under $(k',s')$ of the same plaintexts (up to the statistical $n/p$ loss on the stub), independent of any pre-KeyUp challenge bit that IND-REENC asks to hide.
+The client stub is not part of the server view, so $\rho_0$ in the token does not give the adversary a commitment to match.
+After the header and body hops, the post-KeyUp repository on the server is independent of the hidden bit.
 Summing yields the bound.
 \end{proof}
 
@@ -918,7 +921,7 @@ In this section, we present the implementation details of \textsf{uss-khvc} and 
 We implement \textsf{uss-khvc} as a unified Rust crate built upon \texttt{arkworks 0.5} (for BLS12-381 pairings and polynomial operations), \texttt{aes-gcm} (for baseline symmetric operations), and \texttt{curve25519-dalek 4.1} (for Ristretto group arithmetic).
 
 \paragraph{Core Architecture.}
-File bodies in \texttt{uss.rs} are processed using the Ring-LWR DEM with cached $a_b$ NTTs. During key updates (\textsf{KeyUp}), the server updates every block by adding $F_\Delta$ directly, avoiding the overhead of re-computing $a_b$. Single-slot updates (\textsf{FileUp}) leverage our closed-form $O(1)$ \texttt{open\_one\_hot} routine, while dense updates employ FK20 for multi-opening proofs. To optimize performance, the crate dynamically selects the naive all-open algorithm for vector dimensions $n < 1024$, and switches to FK20 for $n \ge 1024$. The KHVC backend utilizes \texttt{Radix2EvaluationDomain} IFFTs alongside a custom $\mathbb{G}_1$ Cooley--Tukey FFT implementation.
+File bodies in \texttt{uss.rs} are processed using the Ring-LWR DEM with cached $a_b$ NTTs. During key updates (\textsf{KeyUp}), the server adds one pad $F_{\Delta+\delta}$ per block. The extra RLWE header is refreshed once per file, so the body scan stays a single ring product. Single-slot updates (\textsf{FileUp}) leverage our closed-form $O(1)$ \texttt{open\_one\_hot} routine, while dense updates employ FK20 for multi-opening proofs. To optimize performance, the crate dynamically selects the naive all-open algorithm for vector dimensions $n < 1024$, and switches to FK20 for $n \ge 1024$. The KHVC backend utilizes \texttt{Radix2EvaluationDomain} IFFTs alongside a custom $\mathbb{G}_1$ Cooley--Tukey FFT implementation.
 
 \paragraph{Baselines and Comparison Targets.}
 For comparison, we implement Catalano--Fiore HVC (CF-HVC) over Type-3 pairings, storing elements $h_i \in \mathbb{G}_1$, $\hat{h}_i \in \mathbb{G}_2$, and cross-terms $h_{i,j} \in \mathbb{G}_1$. We also evaluate existing Updatable Encryption (UE) schemes: SHINE~\cite{SHINEcode}, ReCrypt~\cite{ReCryptcode}, and nested AES, using published reference numbers for the RLWE-based KH-PRF of~\cite{BDGJ20} only as a qualitative reference (we do not re-benchmark that codebase here). Because RISE lacked a public implementation, we developed a Rust implementation within the same codebase to ensure consistent and fair benchmarking.
@@ -1040,7 +1043,7 @@ Evaluated using the \texttt{lattice-estimator}~\cite{APS15} (commit \texttt{53da
 
 \paragraph{Caching Optimizations.}
 Caching NTT representations of public polynomials $a_b$ requires $4\times$ the plaintext size in memory, but reduces key rotation time for $4 \times 1$\,GB files from $404$\,s (rebuilding $a_b$ on the fly) to $254$\,s.
-The KeyUp token is $4240$ bytes: $\Delta\in R_q$ ($4096$\,B), RISE $(Y',\Delta_R)$ ($48+32$\,B), the KHVC blinding $\rho_0$ ($32$\,B), and a $32$-byte epoch/counter word.
+The KeyUp token is $266384$ bytes: $\Delta\in R_q$ ($4096$\,B), RISE $(Y',\Delta_R)$, $\rho_0$, and a $32$-byte epoch word ($144$\,B), plus the mask-header key-switching key ($262144$\,B). The body scan is still one ring product per block, so the previously measured KeyUp times are unchanged; the header refresh is once per file.
 
 \subsection{End-to-End USS Performance}
 \label{sec:eval_uss}
@@ -1060,7 +1063,7 @@ Verification CRS ($n=1024$)   & 50.5\,MB & 48.3\,KB ($1070\times$ reduction) \\
 Operational CRS ($n=1024$)    & 50.5\,MB & 96.3\,KB ($512\times$ reduction) \\
 Parameter Setup (\textsf{ParGen}, $n=1024$) & 70.2\,s & 0.38\,s ($185\times$ speedup) \\
 CRS Size ($n=16384$)          & 12.8\,GB & 768\,KB (Verification) / 1.5\,MB (Operational) \\
-Key Update (\textsf{KeyUp}, $4 \times 1$\,GB) & Out of Memory & 254\,s / 4240\,B token \\
+Key Update (\textsf{KeyUp}, $4 \times 1$\,GB) & Out of Memory & 254\,s / 266384\,B token \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1097,17 +1100,17 @@ For dense updates ($k\ge 8$) FK20 keeps KHVC near-constant at $\approx 1.67$\,s.
 \toprule
 Scheme & Repository Size & KeyUp Latency & Data Transferred & OF-PTXT Integrity \\
 \midrule
-KHVC-USS            & $4 \times 1$\,GB   & 254\,s & 4240\,B & Yes \\
+KHVC-USS            & $4 \times 1$\,GB   & 254\,s & 266384\,B & Yes \\
 AES Client Re-enc   & $4 \times 1$\,GB   & 17.9\,s$^{\ddagger}$ & 4.0\,GB & No \\
 Nested AES Upd      & $4 \times 1$\,GB   & 17.5\,s$^{\ddagger}$ & 4.0\,GB & No \\
 ReCrypt-KHPRF (EC)  & $4 \times 1$\,GB   & 55\,min$^{\ddagger}$ & 8.0\,GB & No \\
 SHINE0 on bodies    & $4 \times 1$\,GB   & 37\,min$^{\ddagger}$ & 4.0\,GB & No \\
 RISE on bodies      & $4 \times 1$\,GB   & 4.6\,h$^{\ddagger}$  & 8.0\,GB & No \\
 \midrule
-KHVC-USS            & $8 \times 100$\,MB & 58.9\,s & 4240\,B & Yes \\
+KHVC-USS            & $8 \times 100$\,MB & 58.9\,s & 266384\,B & Yes \\
 AES Client Re-enc   & $8 \times 100$\,MB & 3.5\,s$^{\ddagger}$  & 800\,MB & No \\
 \midrule
-KHVC-USS            & $64 \times 1$\,MB  & 2.22\,s & 4240\,B & Yes \\
+KHVC-USS            & $64 \times 1$\,MB  & 2.22\,s & 266384\,B & Yes \\
 AES Client Re-enc   & $64 \times 1$\,MB  & 0.28\,s & 64\,MB & No \\
 \bottomrule
 \end{tabular}\\[0.3em]
@@ -1133,7 +1136,7 @@ $n$ Files & File Size ($|m_i|$) & \textsf{ParGen} & \textsf{Store} & \textsf{Rev
 \end{table}
 
 \paragraph{Repository Key Rotation Trade-Offs.}
-Table~\ref{tab:uss-cmp} highlights the primary trade-offs of KHVC-USS during key rotation of a $4 \times 1$\,GB repository. While raw client-side AES re-encryption is faster ($17.9$\,s), it requires transmitting the full $4.0$\,GB payload over the network and lacks server-side out-of-date plaintext integrity ($\mathrm{OF\text{-}PTXT}$). In contrast, KHVC-USS completes key rotation on the server in $254$\,s while requiring only a $4240$-byte transfer over the network---about an $8.7\times$ wall-clock improvement over the extrapolated SHINE0-on-bodies baseline ($37$\,min) and far larger against RISE-on-bodies ($4.6$\,h), noting that those algebraic figures are scaled from 1\,MB microbenchmarks rather than measured end-to-end on 4\,GB. As summarized in Table~\ref{tab:uss_micro}, processing time scales linearly with total payload size under the Ring-LWR DEM.
+Table~\ref{tab:uss-cmp} highlights the primary trade-offs of KHVC-USS during key rotation of a $4 \times 1$\,GB repository. While raw client-side AES re-encryption is faster ($17.9$\,s), it requires transmitting the full $4.0$\,GB payload over the network and lacks server-side out-of-date plaintext integrity ($\mathrm{OF\text{-}PTXT}$). In contrast, KHVC-USS completes key rotation on the server in $254$\,s while requiring only a $266384$-byte transfer over the network---about an $8.7\times$ wall-clock improvement over the extrapolated SHINE0-on-bodies baseline ($37$\,min) and far larger against RISE-on-bodies ($4.6$\,h), noting that those algebraic figures are scaled from 1\,MB microbenchmarks rather than measured end-to-end on 4\,GB. As summarized in Table~\ref{tab:uss_micro}, processing time scales linearly with total payload size under the Ring-LWR DEM.
 
 \section{Conclusion}
 \label{sec:conclusion}
@@ -1144,7 +1147,7 @@ Theoretically, our construction guarantees statistical position hiding (up to an
 For bulk file updates, our Ring-LWR DEM provides provable $\mathrm{IND\text{-}CPA}$ confidentiality across $127$ update epochs, with concrete generic-lattice estimator analysis placing the lowest-cost attack at $\approx 2^{319}$ operations—well above the $2^{128}$ security threshold. 
 
 Empirically, our single-slot \textsf{FileUp} algorithm achieves a $194$\,ms latency at $n=1024$ using closed-form one-hot opening proofs. 
-For a repository of four $1$\,GB files, end-to-end key updates complete in $254$\,s on the server with a compact $4240$-byte network transfer. 
+For a repository of four $1$\,GB files, end-to-end key updates complete in $254$\,s on the server with a $266384$-byte network transfer. 
 Overall, KHVC-USS demonstrates that integrity-aware, key-updatable secure storage can scale efficiently to real-world datasets without compromising on cryptographic security guarantees.
 
 

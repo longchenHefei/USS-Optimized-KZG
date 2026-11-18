@@ -379,7 +379,7 @@ fn run_uss_lowmem(rows: &mut Vec<String>, n: usize, fsize: usize) {
     for i in 0..n {
         let file = random_message(fsize, 1000 + i as u64);
         digests.push(Sha256::digest(&file));
-        staged.push(stage_file(&sk.dem, &file, &mut rng));
+        staged.push(stage_file(&sk, &file, &mut rng));
         eprintln!("  staged file {i} in {:.1}s", t0.elapsed().as_secs_f64());
     }
     let mut repo = seal(&pp, &sk, staged, &mut rng);

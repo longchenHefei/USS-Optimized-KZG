@@ -1,12 +1,16 @@
 //! Updatable secure storage: KHVC stub + RISE-wrapped openings + Ring-LWR file bodies.
 //!
-//! The DEM key is one Ring-LWR secret for the epoch. KeyUp sends Δ = s' − s and the
-//! server adds F_Δ to every body. Openings stay under RISE so FileUp/KeyUp can
-//! update them homomorphically. Plaintext integrity is the stub, not a MAC on the DEM.
+//! The DEM key is one Ring-LWR secret for the epoch, plus a per-file mask \(\sigma\)
+//! stored in an RLWE header. KeyUp sends \(\Delta=s'-s\) and a header key-switching
+//! key. The server samples an ephemeral \(\delta\), adds \(F_{\Delta+\delta}\) to every
+//! body, and folds \(\delta\) into the header. \(\delta\) is erased, so the public
+//! token does not determine the new body. Openings stay under RISE. Plaintext
+//! integrity is the client-side stub, not a MAC on the DEM.
 //!
 //! FileUp openings use the one-hot closed form (`Khvc::open_one_hot`). KeyUp reuses
 //! cached public `a_b` NTTs stored with each file (not secret; rebuildable from tweak).
 
+use crate::hdr::{self, HdrCt, HdrPk, HdrSk};
 use crate::khvc::{hash_to_fr, Commitment, Khvc, Opening};
 use crate::rise::{rise_ct_bytes, rise_dec, rise_enc, rise_hom, rise_next, rise_upd, RiseCt, RisePk, RiseSk};
 use crate::rlwr_ue::{self, a_ntt_block, dec_block, enc_block, upd_block, Sk};
@@ -24,6 +28,8 @@ pub struct UssSk {
     pub rise: RiseSk,
     pub rise_pk: RisePk,
     pub dem: Sk,
+    pub hdr: HdrSk,
+    pub hdr_pk: HdrPk,
 }
 
 #[derive(Clone)]
@@ -36,6 +42,8 @@ pub struct FileRecord {
     /// Cached twisted NTT of each public `a_b`. Rebuildable from `tweak`; speeds KeyUp/Rev.
     pub a_ntt: Vec<Vec<u64>>,
     pub proof_ct: RiseCt,
+    /// RLWE encryption of the per-file mask secret \(\sigma\).
+    pub mask: HdrCt,
 }
 
 #[derive(Clone)]
@@ -52,10 +60,13 @@ pub fn pargen<R: RngCore>(n: usize, rng: &mut R) -> UssPp {
 
 pub fn keygen<R: RngCore>(rng: &mut R) -> UssSk {
     let (rise, rise_pk) = RiseSk::keygen(rng);
+    let (hdr, hdr_pk) = hdr::keygen(rng);
     UssSk {
         rise,
         rise_pk,
         dem: rlwr_ue::keygen(rng),
+        hdr,
+        hdr_pk,
     }
 }
 
@@ -99,9 +110,10 @@ pub struct StagedFile {
     body_len: usize,
     a_ntt: Vec<Vec<u64>>,
     h: Fr,
+    mask: HdrCt,
 }
 
-pub fn stage_file<R: RngCore>(dem: &Sk, file: &[u8], rng: &mut R) -> StagedFile {
+pub fn stage_file<R: RngCore>(sk: &UssSk, file: &[u8], rng: &mut R) -> StagedFile {
     let mut nu = [0u8; 32];
     let mut tweak = [0u8; 16];
     rng.fill_bytes(&mut nu);
@@ -110,13 +122,16 @@ pub fn stage_file<R: RngCore>(dem: &Sk, file: &[u8], rng: &mut R) -> StagedFile 
     pre.extend_from_slice(&nu);
     let h = hash_to_fr(&pre);
     let packed = pack(&nu, file);
-    let (body, body_len, a_ntt) = body_of(&tweak, dem, &packed);
+    let sigma = hdr::sample_sigma(rng);
+    let dem = hdr::combined_dem(&sk.dem, &sigma);
+    let (body, body_len, a_ntt) = body_of(&tweak, &dem, &packed);
     StagedFile {
         tweak,
         body,
         body_len,
         a_ntt,
         h,
+        mask: hdr::encrypt(&sk.hdr_pk, &sigma, rng),
     }
 }
 
@@ -136,6 +151,7 @@ pub fn seal<R: RngCore>(pp: &UssPp, sk: &UssSk, staged: Vec<StagedFile>, rng: &m
             body_len: s.body_len,
             a_ntt: s.a_ntt,
             proof_ct: rise_enc(sk.rise_pk, openings[i].0, rng),
+            mask: s.mask,
         })
         .collect();
     Repository { files, stub }
@@ -144,13 +160,19 @@ pub fn seal<R: RngCore>(pp: &UssPp, sk: &UssSk, staged: Vec<StagedFile>, rng: &m
 pub fn store<R: RngCore>(pp: &UssPp, sk: &UssSk, files: &[Vec<u8>], rng: &mut R) -> Repository {
     let n = pp.khvc.n;
     assert_eq!(files.len(), n);
-    let staged: Vec<StagedFile> = files.iter().map(|f| stage_file(&sk.dem, f, rng)).collect();
+    let staged: Vec<StagedFile> = files.iter().map(|f| stage_file(sk, f, rng)).collect();
     seal(pp, sk, staged, rng)
+}
+
+fn file_dem(sk: &UssSk, rec: &FileRecord) -> Sk {
+    let sigma = hdr::decrypt(&sk.hdr, &rec.mask);
+    hdr::combined_dem(&sk.dem, &sigma)
 }
 
 pub fn retrieve(pp: &UssPp, sk: &UssSk, repo: &Repository, i: usize) -> Option<Vec<u8>> {
     let rec = &repo.files[i];
-    let inner = open_body(&rec.a_ntt, &sk.dem, &rec.body, rec.body_len);
+    let dem = file_dem(sk, rec);
+    let inner = open_body(&rec.a_ntt, &dem, &rec.body, rec.body_len);
     if inner.len() < 32 {
         return None;
     }
@@ -179,8 +201,8 @@ pub fn file_up<R: RngCore>(
     new_file: &[u8],
     rng: &mut R,
 ) -> usize {
-    let rec = &repo.files[i];
-    let inner = open_body(&rec.a_ntt, &sk.dem, &rec.body, rec.body_len);
+    let dem_i = file_dem(sk, &repo.files[i]);
+    let inner = open_body(&repo.files[i].a_ntt, &dem_i, &repo.files[i].body, repo.files[i].body_len);
     let old_nu = &inner[..32];
     let old_file = &inner[32..];
     let mut pre_old = old_file.to_vec();
@@ -208,15 +230,18 @@ pub fn file_up<R: RngCore>(
     let mut tweak = [0u8; 16];
     rng.fill_bytes(&mut tweak);
     let packed = pack(&new_ri, new_file);
-    let (body, body_len, a_ntt) = body_of(&tweak, &sk.dem, &packed);
+    let sigma = hdr::sample_sigma(rng);
+    let dem = hdr::combined_dem(&sk.dem, &sigma);
+    let (body, body_len, a_ntt) = body_of(&tweak, &dem, &packed);
     repo.files[i].tweak = tweak;
     repo.files[i].body = body;
     repo.files[i].body_len = body_len;
     repo.files[i].a_ntt = a_ntt;
+    repo.files[i].mask = hdr::encrypt(&sk.hdr_pk, &sigma, rng);
 
-    // Wire size: |m'| + ν (32) + tweak (16) + C_δ (48) + Δh||ρ_δ (64) ≈ |m'|+O(1).
-    // (RISE envelopes of the n openings are produced by the server from public data.)
-    new_file.len() + 32 + 16 + 48 + 64
+    // Wire size: |m'| + ν (32) + tweak (16) + C_δ (48) + Δh||ρ_δ (64)
+    // + one RLWE mask header. Opening envelopes are produced by the server.
+    new_file.len() + 32 + 16 + 48 + 64 + hdr::ct_bytes()
 }
 
 /// Rotate keys. Header token is the RISE fields; the DEM token is one ring element.
@@ -240,21 +265,29 @@ pub fn key_up<R: RngCore>(
         .map(|z| Opening(*z * r0))
         .collect();
     let delta = rlwr_ue::token(&old.dem, &new.dem);
+    // One key-switching key per epoch, not per file. The stub update below is the
+    // client-local half of this co-located harness; the server never stores `stub`.
+    let ksk = hdr::switch_key(&old.hdr, &new.hdr_pk, rng);
     for j in 0..pp.khvc.n {
         repo.files[j].proof_ct = rise_upd(tk, repo.files[j].proof_ct, rng);
         let enc0 = rise_enc(new.rise_pk, openings0[j].0, rng);
         repo.files[j].proof_ct = rise_hom(repo.files[j].proof_ct, enc0);
+        let delta_mask = hdr::sample_sigma(rng);
+        let step = rlwr_ue::add_sk(&delta, &rlwr_ue::sk_from_poly(&delta_mask));
         let file = &mut repo.files[j];
         let nblocks = file.body.len() / rlwr_ue::N;
         debug_assert_eq!(file.a_ntt.len(), nblocks);
         for b in 0..nblocks {
             let start = b * rlwr_ue::N;
-            upd_block(&file.a_ntt[b], &delta, &mut file.body[start..start + rlwr_ue::N]);
+            upd_block(&file.a_ntt[b], &step, &mut file.body[start..start + rlwr_ue::N]);
         }
+        let switched = hdr::keyswitch(&ksk, &file.mask);
+        let fresh = hdr::encrypt(&new.hdr_pk, &delta_mask, rng);
+        file.mask = hdr::add(&switched, &fresh);
     }
-    // RISE header: Δ (32) + Y' (48) + ρ0 (32) + the 32-byte counter word = 144.
-    // DEM token: N coefficients in Z_q = 4096.
-    32 + 48 + 32 + 32 + rlwr_ue::token_bytes()
+    // RISE: Δ_R (32) + Y' (48) + ρ0 (32) + epoch word (32).
+    // DEM: Δ in R_q (4096). Header: one RLWE key-switching key.
+    32 + 48 + 32 + 32 + rlwr_ue::token_bytes() + hdr::ksk_bytes()
 }
 
 pub fn repo_bytes(repo: &Repository) -> usize {
@@ -297,5 +330,9 @@ mod tests {
         assert!(retrieve(&pp, &sk, &repo, 1).is_none());
         assert_eq!(retrieve(&pp, &sk2, &repo, 1).unwrap(), newf);
         assert_eq!(retrieve(&pp, &sk2, &repo, 2).unwrap(), files[2]);
+        let sk3 = keygen(&mut rng);
+        key_up(&pp, &sk2, &sk3, &mut repo, &mut rng);
+        assert_eq!(retrieve(&pp, &sk3, &repo, 1).unwrap(), newf);
+        assert!(retrieve(&pp, &sk2, &repo, 1).is_none());
     }
 }

@@ -250,6 +250,21 @@ pub fn keygen(rng: &mut impl RngCore) -> Sk {
     Sk { s_ntt: twist_fwd(&random_poly(rng)) }
 }
 
+pub fn sk_from_poly(p: &[u64]) -> Sk {
+    Sk { s_ntt: twist_fwd(p) }
+}
+
+/// Sum of two Ring-LWR secrets, reduced in \(R_q\).
+pub fn add_sk(a: &Sk, b: &Sk) -> Sk {
+    let ac = twist_inv(&a.s_ntt);
+    let bc = twist_inv(&b.s_ntt);
+    let mut d = vec![0u64; N];
+    for i in 0..N {
+        d[i] = addq(ac[i], bc[i]);
+    }
+    Sk { s_ntt: twist_fwd(&d) }
+}
+
 /// \(\Delta\) such that updating under \(\Delta\) moves ciphertexts from `old` to `new`.
 /// Sent on the wire as \(N\) coefficients in \(\mathbb{Z}_q\) (see [`token_bytes`]).
 pub fn token(old: &Sk, new: &Sk) -> Sk {

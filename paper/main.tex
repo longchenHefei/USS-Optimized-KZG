@@ -30,7 +30,7 @@
 \begin{abstract}
 Updatable Secure Storage (USS) enables a client to outsource dynamic encrypted databases, maintain a single constant-size local stub, and detect server-side state-rollback attacks—even after secret keys are compromised. To enable server-side key rotation without downloading and re-encrypting payloads, USS integrates Updatable Encryption (UE). However, existing USS constructions remain impractical. The pioneering scheme by Chen, Guo, Li, and Tang (CGLT23, ASIACRYPT 2023) relies on a Catalano--Fiore Homomorphic Vector Commitment (HVC) with a quadratic $O(n^2)$ Common Reference String (SRS)—requiring tens of megabytes at vector dimension $n=1024$ and becoming prohibitive at $n=2^{14}$—while leaving the Data Encapsulation Mechanism (DEM) unmeasured for large payloads.
 
-This paper bridges the gap to practical deployment by resolving both the commitment and encryption bottlenecks. First, we propose $\mathsf{KHVC}$, a succinct KZG-based HVC featuring an $O(n)$ SRS, tight $q$-SDH position binding, and statistical position hiding. At $n=1024$, $\mathsf{KHVC}$ reduces parameter generation time from $70.2\,\text{s}$ to $0.38\,\text{s}$ and operational parameter size from $50.5\,\text{MB}$ to $96.3\,\text{KB}$ ($512\times$ reduction). Second, leveraging the property that USS requires only $\mathrm{IND\text{-}CPA}$ style security for the DEM, we instantiate a high-throughput Ring-LWR key-homomorphic PRF sized for up to $127$ consecutive key updates. We optimize its evaluation by pre-caching public polynomial NTT representations and deriving a closed-form one-hot formula for single-slot updates to eliminate dense FK20 overhead. We implement the complete USS architecture alongside the 2023 baseline in Rust using BLS12-381 pairings. Evaluated on an Apple M5 Pro workstation, our Ring-LWR DEM achieves a re-encryption throughput of $32.6\,\text{MB/s}$ and completes end-to-end key rotations for four $1\,\text{GB}$ files in $254\,\text{s}$ with a $266384$-byte update token ($4096$-byte $\Delta$ + $144$-byte RISE/$\rho_0$/epoch word + $262144$-byte header key-switching key), demonstrating for the first time that integrity-aware USS scales efficiently to gigabyte-sized cloud databases.
+This paper bridges the gap to practical deployment by resolving both the commitment and encryption bottlenecks. First, we propose $\mathsf{KHVC}$, a succinct KZG-based HVC featuring an $O(n)$ SRS, tight $q$-SDH position binding, and statistical position hiding. At $n=1024$, $\mathsf{KHVC}$ reduces parameter generation time from $70.2\,\text{s}$ to $0.38\,\text{s}$ and operational parameter size from $50.5\,\text{MB}$ to $96.3\,\text{KB}$ ($512\times$ reduction). Second, leveraging the property that USS requires only $\mathrm{IND\text{-}CPA}$ style security for the DEM, we instantiate a high-throughput Ring-LWR key-homomorphic PRF sized for up to $127$ consecutive key updates. We optimize its evaluation by pre-caching public polynomial NTT representations and deriving a closed-form one-hot formula for single-slot updates to eliminate dense FK20 overhead. We implement the complete USS architecture alongside the 2023 baseline in Rust using BLS12-381 pairings. Evaluated on an Apple M5 Pro workstation, our Ring-LWR DEM achieves a re-encryption throughput of $32.6\,\text{MB/s}$ and completes end-to-end key rotations for four $1\,\text{GB}$ files in $254\,\text{s}$ with a $266384$-byte update token ($4096$-byte $\Delta$ + $144$-byte RISE/$\rho_0$/epoch word + $262144$-byte header key-switching key), excluding a separately published $16384$-byte header public key $\mathsf{pk}'$, demonstrating for the first time that integrity-aware USS scales efficiently to gigabyte-sized cloud databases.
 \end{abstract}
 
 \noindent\textbf{Keywords:} vector commitment, KZG, updatable encryption, updatable secure storage, key rotation.
@@ -60,7 +60,7 @@ In this paper, we bridge the gap between theoretical USS definitions and real-wo
     Leveraging the architectural insight from CGLT23~\cite{CGLT23}—where payload integrity is fully guaranteed by the HVC stub, relaxing DEM requirements to $\mathrm{IND\text{-}CPA}$ security—we demonstrate that under a practical $127$-update lifecycle, a Ring-LWR-based Key-Homomorphic PRF provides sufficient noise budget without the computational overhead of RLWE. We deliver the first concrete instantiation and end-to-end evaluation of a Ring-LWR DEM tailored for large payloads, incorporating public polynomial NTT pre-caching and header elimination to maximize re-encryption throughput while maintaining generic lattice security above $2^{128}$.
 
     \item \textbf{Complete Implementation \& End-to-End Evaluation:} 
-    We provide a production-grade Rust implementation (\texttt{uss-khvc}) of the complete USS framework alongside existing cryptographic baselines using Type-3 BLS12-381 pairings. Benchmarked on an Apple M5 Pro, our Ring-LWR DEM achieves a re-encryption throughput of $32.6\,\text{MB/s}$ on $1\,\text{MB}$ payload blocks ($254\,\text{s}$ total key rotation time for four $1\,\text{GB}$ files with a $266384$-byte token: $4096$-byte $\Delta$ + $144$-byte RISE/$\rho_0$/epoch word + $262144$-byte header key-switching key), demonstrating for the first time that integrity-aware, key-updatable storage can scale efficiently to gigabyte-sized cloud databases.
+    We provide a production-grade Rust implementation (\texttt{uss-khvc}) of the complete USS framework alongside existing cryptographic baselines using Type-3 BLS12-381 pairings. Benchmarked on an Apple M5 Pro, our Ring-LWR DEM achieves a re-encryption throughput of $32.6\,\text{MB/s}$ on $1\,\text{MB}$ payload blocks ($254\,\text{s}$ total key rotation time for four $1\,\text{GB}$ files with a $266384$-byte token: $4096$-byte $\Delta$ + $144$-byte RISE/$\rho_0$/epoch word + $262144$-byte header key-switching key, excluding a separately published $16384$-byte header public key $\mathsf{pk}'$), demonstrating for the first time that integrity-aware, key-updatable storage can scale efficiently to gigabyte-sized cloud databases.
 \end{itemize}
 
 
@@ -358,16 +358,18 @@ An updatable encryption scheme $\mathsf{UE}$ consists of six algorithms:
     \item $\mathsf{UE.Enc}(\mathsf{sk}_e,\mathsf{tweak},m)\to\mathsf{ct}$:
           encrypts $m$ under the current DEM secret and a fresh file mask.
     \item $\mathsf{UE.Dec}(\mathsf{sk}_e,\mathsf{tweak},\mathsf{ct})\to m/\bot$: decrypts.
-    \item $\mathsf{UE.ReEnc}(\Delta_{e+1},\mathsf{ksk}_{e+1},\mathsf{ct})\to\mathsf{ct}'$:
+    \item $\mathsf{UE.ReEnc}(\Delta_{e+1},\mathsf{ksk}_{e+1},\mathsf{pk}_H',\mathsf{ct})\to\mathsf{ct}'$:
           updates a ciphertext from epoch $e$ to epoch $e+1$ using the
-          token $(\Delta_{e+1},\mathsf{ksk}_{e+1})$ and fresh server coins.
+          token $(\Delta_{e+1},\mathsf{ksk}_{e+1},\mathsf{pk}_H')$ and fresh server coins.
+          Here $\mathsf{pk}_H'$ is the new header public key output by $\mathsf{NextKey}$;
+          it is public and is given whenever the token is given.
 \end{itemize}
 Correctness requires $\mathsf{UE.Dec}(\mathsf{sk}_e,\mathsf{tweak},\mathsf{UE.Enc}(\mathsf{sk}_e,\mathsf{tweak},m))=m$ and, after any sequence of honest updates of length at most the scheme's noise budget,
 $$\mathsf{UE.Dec}(\mathsf{sk}_{e+t},\mathsf{tweak},\mathsf{UE.ReEnc}^*(\mathsf{UE.Enc}(\mathsf{sk}_e,\mathsf{tweak},m)))=m.$$
 
 \paragraph{Oracles (following~\cite[§3.2]{LT18}).}
 \label{def:ue-oracles}
-In the security experiments the challenger maintains an epoch counter $e$, the current key $\mathsf{sk}_e$, the current token $(\Delta_e,\mathsf{ksk}_e)$, a challenge epoch $\tilde e$ (initially $\bot$), and lists
+In the security experiments the challenger maintains an epoch counter $e$, the current key $\mathsf{sk}_e$, the current token $(\Delta_e,\mathsf{ksk}_e,\mathsf{pk}_e)$ (where $\mathsf{pk}_e$ is the header public key of epoch $e$), a challenge epoch $\tilde e$ (initially $\bot$), and lists
 \begin{itemize}
   \item $\mathcal{L}$: honest non-challenge ciphertexts $(c,e)$ produced by $\mathcal{O}^{\mathsf{Enc}}$ or $\mathcal{O}^{\mathsf{ReEnc}}$;
   \item $\tilde{\mathcal{L}}$: updated versions of the challenge ciphertext;
@@ -382,16 +384,22 @@ The adversary may query:
   \item[$\mathcal{O}^{\mathsf{Next}}$]
     run $(\mathsf{sk}_{e+1},\Delta_{e+1},\mathsf{ksk}_{e+1},\mathsf{pk}_H')\gets\mathsf{UE.NextKey}(\mathsf{sk}_e)$ and set $e\leftarrow e+1$;
     if the challenge has already been issued, also update the challenge ciphertext
-    $\tilde c_{e}\gets\mathsf{UE.ReEnc}(\Delta_{e},\mathsf{ksk}_{e},\tilde c_{e-1})$ and store it in $\tilde{\mathcal{L}}$.
+    $\tilde c_{e}\gets\mathsf{UE.ReEnc}(\Delta_{e},\mathsf{ksk}_{e},\mathsf{pk}_{e},\tilde c_{e-1})$ and store it in $\tilde{\mathcal{L}}$.
   \item[$\mathcal{O}^{\mathsf{ReEnc}}(c)$]
-    require $(c,e-1)\in\mathcal{L}$; return $c'\gets\mathsf{UE.ReEnc}(\Delta_{e},\mathsf{ksk}_{e},c)$ and add $(c',e)$ to $\mathcal{L}$.
+    require $(c,e-1)\in\mathcal{L}$; return $c'\gets\mathsf{UE.ReEnc}(\Delta_{e},\mathsf{ksk}_{e},\mathsf{pk}_{e},c)$ and add $(c',e)$ to $\mathcal{L}$.
   \item[$\mathcal{O}^{\mathsf{Corrupt}}(\mathsf{key},e^*)$ / $\mathcal{O}^{\mathsf{Corrupt}}(\mathsf{token},e^*)$]
-    for $e^*\le e$, return $\mathsf{sk}_{e^*}$ (add $e^*$ to $\mathcal{K}$) or $(\Delta_{e^*},\mathsf{ksk}_{e^*})$ (add $e^*$ to $\mathcal{T}$), respectively.
+    for $e^*\le e$, return $\mathsf{sk}_{e^*}$ (add $e^*$ to $\mathcal{K}$) or $(\Delta_{e^*},\mathsf{ksk}_{e^*},\mathsf{pk}_{e^*})$ (add $e^*$ to $\mathcal{T}$), respectively.
   \item[$\mathcal{O}^{\mathsf{Upd}\tilde{\mathsf{C}}}$]
     return the current challenge ciphertext $\tilde c_e\in\tilde{\mathcal{L}}$ and add $e$ to $\mathcal{C}$.
 \end{description}
-Extended sets $\mathcal{C}^*$, $\mathcal{K}^*$, $\mathcal{T}^*$ close $\mathcal{C}$, $\mathcal{K}$, $\mathcal{T}$ under the scheme's leakage profile (token inference and uni-/bi-directional updates) as in~\cite[§3.3]{LT18}.
-A trivial win occurs if $\mathcal{C}^*\cap\mathcal{K}^*\neq\emptyset$ (the adversary knows a challenge ciphertext and the matching epoch key).
+Extended sets $\mathcal{C}^*$ and $\mathcal{T}^*$ close $\mathcal{C}$ and $\mathcal{T}$
+under token inference as in~\cite[§3.3]{LT18}.
+The set $\mathcal{K}^*$ is \emph{not} the single-key bi-directional closure of~\cite{LT18}:
+keys are split as $(s,\mathsf{sk}_H)$, and $\mathcal{K}^*$ is defined in
+Definition~\ref{def:ind-upd-cpa-pub}.
+A trivial win occurs if $\mathcal{C}^*\cap\mathcal{K}^*\neq\emptyset$
+(the adversary has a challenge-equal ciphertext at an epoch whose decryption
+capability it can recover).
 
 \begin{definition}[IND-ENC-CPA~\cite{LT18}]
 \label{def:ind-enc-cpa}
@@ -425,7 +433,7 @@ is negligible in $\lambda$, where the experiment proceeds as follows.
   \item $\mathcal{A}$ queries $\mathcal{O}^{\mathsf{Enc}}$, $\mathcal{O}^{\mathsf{Next}}$, $\mathcal{O}^{\mathsf{ReEnc}}$, and $\mathcal{O}^{\mathsf{Corrupt}}$.
   \item $\mathcal{A}$ outputs two ciphertexts $(c_0,c_1,\mathsf{st})$ that both appear in $\mathcal{L}$ at epoch $e-1$ and satisfy $|c_0|=|c_1|$.
         The challenger samples $b\gets\{0,1\}$, sets $\tilde e\leftarrow e$,
-        $\tilde c\gets\mathsf{UE.ReEnc}(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},c_b)$, stores $(\tilde c,\tilde e)$ in $\tilde{\mathcal{L}}$, and returns $\tilde c$ to $\mathcal{A}$.
+        $\tilde c\gets\mathsf{UE.ReEnc}(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},\mathsf{pk}_{\tilde e},c_b)$, stores $(\tilde c,\tilde e)$ in $\tilde{\mathcal{L}}$, and returns $\tilde c$ to $\mathcal{A}$.
   \item $\mathcal{A}$ continues with the same oracles plus $\mathcal{O}^{\mathsf{Upd}\tilde{\mathsf{C}}}$, then outputs $b'$.
   \item The experiment returns $1$ iff $b'=b$ and all of the following hold:
         \begin{enumerate}
@@ -442,14 +450,34 @@ IND-UPD-CPA is the unlinkability game of~\cite{LT18}: an updated ciphertext hide
 \label{def:ind-upd-cpa-pub}
 The experiment is identical to Definition~\ref{def:ind-upd-cpa}, except that in Step~3 the challenger also returns the challenge-epoch token $(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},\mathsf{pk}')$ together with $\tilde c$, and places $\tilde e$ in $\mathcal{T}$.
 The experiment returns $1$ iff $b'=b$ and $\mathcal{C}^*\cap\mathcal{K}^*=\emptyset$ (no key corruption in a challenge-equal epoch).
-Condition~(c) of Definition~\ref{def:ind-upd-cpa} is vacuous: $\mathsf{ReEnc}$ is randomized by an ephemeral mask that is not part of the token, so $\mathcal{A}$ cannot test equality against $\mathsf{ReEnc}(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},c_0)$ or $\mathsf{ReEnc}(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},c_1)$.
-The extended sets $\mathcal{C}^*$, $\mathcal{K}^*$, $\mathcal{T}^*$ are computed as in~\cite[§3.3]{LT18}, under the following leakage profile.
+Condition~(c) of Definition~\ref{def:ind-upd-cpa} is vacuous: $\mathsf{ReEnc}$ is randomized by an ephemeral mask that is not part of the token, so $\mathcal{A}$ cannot test equality against $\mathsf{ReEnc}(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},\mathsf{pk}',c_0)$ or $\mathsf{ReEnc}(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},\mathsf{pk}',c_1)$.
+The sets $\mathcal{C}^*$ and $\mathcal{T}^*$ are computed as in~\cite[§3.3]{LT18}.
+The set $\mathcal{K}^*$ is defined for the split key $(s,\mathsf{sk}_H)$ as follows;
+it is not the single-key bi-directional closure of~\cite{LT18}.
 \begin{itemize}
   \item The DEM secret is bi-directional: $\Delta=s'-s$ yields $s'$ from $s$ and $s$ from $s'$.
-  \item The header secret is uni-directional: $\mathsf{ksk}$ consists of RLWE encryptions, under $\mathsf{pk}'$, of a sixteen-digit base-$2^4$ gadget decomposition of $\mathsf{sk}_H$. Thus $\mathsf{sk}_H'$ together with $\mathsf{ksk}$ recovers $\mathsf{sk}_H$, but $\mathsf{sk}_H$ together with $\mathsf{ksk}$ does not yield $\mathsf{sk}_H'$.
+        Inferring a DEM secret $s_e$ from another epoch's DEM secret and public tokens
+        alone does \emph{not} place epoch $e$ in $\mathcal{K}^*$.
+  \item The header secret is uni-directional: $\mathsf{ksk}$ consists of RLWE encryptions,
+        under $\mathsf{pk}'$, of a sixteen-digit base-$2^4$ gadget decomposition of the
+        \emph{old} $\mathsf{sk}_H$ (encryptions of $\mathsf{sk}_H\cdot 2^{4i}$ for $i=0,\dots,15$).
+        Thus $\mathsf{sk}_H'$ together with $\mathsf{ksk}$ recovers $\mathsf{sk}_H$,
+        but $\mathsf{sk}_H$ together with $\mathsf{ksk}$ does not yield $\mathsf{sk}_H'$.
+  \item Epoch $e$ enters $\mathcal{K}^*$ if and only if the adversary can recover that
+        epoch's decryption capability: both $s_e$ and $\mathsf{sk}_H^e$, or equivalently
+        can extract the ephemeral mask $\delta$ from a challenge header at epoch $e$.
+        In particular, corrupting the challenge-epoch header key $\mathsf{sk}_H'$---or
+        any later header key that, together with later public tokens, opens a backward
+        path to $\mathsf{sk}_H'$---is a trivial win: the new header then decrypts to
+        $\sigma+\delta$, the previous header (after recovering $\mathsf{sk}_H$ from
+        $\mathsf{ksk}$) decrypts to $\sigma$, and $\delta$ together with the public
+        $\Delta$ distinguishes $c'-c-F_\Delta=F_\delta+e'$.
+        Corrupting only an earlier header key, or inferring $s'$ from a corrupted $s$
+        and the public $\Delta$, is not by itself a trivial win.
 \end{itemize}
-In particular, corrupting the challenge-epoch header key $\mathsf{sk}_H'$---or any later header key that, together with later public tokens, opens a path back to $\mathsf{sk}_H'$---is a trivial win: the header then decrypts to $\sigma+\delta$, the previous header (after recovering $\mathsf{sk}_H$ from $\mathsf{ksk}$) decrypts to $\sigma$, and $\delta$ together with the public $\Delta$ distinguishes $c'-c-F_\Delta$.
-The mask does not restore secrecy of $s'$ given $s$ and $\Delta$; it restores unlinkability of the bodies when the token is public and the challenge-epoch header key remains hidden.
+The mask does not restore secrecy of $s'$ given $s$ and $\Delta$; it restores
+unlinkability of the bodies when the token is public and the challenge-epoch
+header key remains hidden.
 \end{definition}
 
 \begin{remark}[DEM specialization used in USS]
@@ -487,8 +515,10 @@ Store $\sigma$ in one RLWE ciphertext $h=\mathsf{Enc}_{\mathsf{pk}_H}(\sigma)$ u
 \paragraph{$\mathsf{UE.Dec}(\mathsf{sk}, \mathsf{tweak}, (c,h))$.}
 Parse $\mathsf{sk}=(s,\mathsf{sk}_H)$. Decrypt $h$ to $\sigma$ under $\mathsf{sk}_H$, recompute $F_{s+\sigma}(b)$, and recover $m_b = c_b - F_{s+\sigma}(b) \pmod p$.
 
-\paragraph{$\mathsf{UE.ReEnc}(\Delta, \mathsf{ksk}, (c,h))$.}
+\paragraph{$\mathsf{UE.ReEnc}(\Delta, \mathsf{ksk}, \mathsf{pk}', (c,h))$.}
 The token carries $\Delta=s'-s$ and a key-switching key from the old header key to the new one. It does not carry the server's fresh coins.
+ReEnc also uses the new header public key $\mathsf{pk}'$, which is the public output of $\mathsf{NextKey}$ and is given whenever the token is given.
+The key-switching key $\mathsf{ksk}$ does not determine $\mathsf{pk}'=(a,b)$.
 \begin{enumerate}
     \item Sample an ephemeral $\delta\leftarrow R_q$ and erase it after the update.
     \item Set $c'_b = c_b + F_{\Delta+\delta}(b) \pmod p$. One ring product per block, the same cost as adding $F_\Delta$.
@@ -555,7 +585,7 @@ In $H_2$ the challenge body is the encoded message plus a uniform pad, hence ind
 Thus $\mathsf{Adv}^{\mathsf{IND\text{-}ENC\text{-}CPA}}\le\mathsf{Adv}^{\mathsf{RLWE}}_{\mathcal{B}_H}+\mathsf{Adv}^{\mathsf{RLWR}}_{\mathcal{B}_2}$.
 
 \paragraph*{IND-UPD-CPA with public token.}
-This is the hop that the almost-KH-PRF template does not provide: $\mathcal{A}$ is given $(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},\mathsf{pk}')$ together with $\tilde c=\mathsf{UE.ReEnc}(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},c_b)$.
+This is the hop that the almost-KH-PRF template does not provide: $\mathcal{A}$ is given $(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},\mathsf{pk}')$ together with $\tilde c=\mathsf{UE.ReEnc}(\Delta_{\tilde e},\mathsf{ksk}_{\tilde e},\mathsf{pk}',c_b)$.
 We first treat a single challenge update; each later honest update of $\tilde c$ is an independent copy of the same two hops and costs an additional $\mathsf{Adv}^{\mathsf{RLWE}}+\mathsf{Adv}^{\mathsf{RLWR}}$.
 Fix a PPT adversary $\mathcal{A}$ that does not trigger a trivial win, so in particular the challenge-epoch header key $\mathsf{sk}_H'$ is unknown (Definition~\ref{def:ind-upd-cpa-pub}).
 Write $\ell$ for the number of body blocks of $c_0$ and $c_1$, and write $h_b$ for the header of $c_b$.
@@ -574,8 +604,18 @@ Write $\ell$ for the number of body blocks of $c_0$ and $c_1$, and write $h_b$ f
         \emph{Hop $G_0\to G_1$.}
         A fresh header encryption $\mathsf{Enc}_{\mathsf{pk}'}(\delta)=(ar+e_1,\,br+e_2+\mathsf{SCALE}\cdot\delta)$ is pseudorandom over $R_{q_H}^2$ by decisional Goldilocks-RLWE under the public key $(a,b)=\mathsf{pk}'$ (ternary $r,e_1,e_2$).
         Adding a pseudorandom pair to the fixed ciphertext $\mathsf{KeySwitch}(\mathsf{ksk},h_b)$ yields a pseudorandom pair, independent of that summand.
-        The reduction generates all keys and $\mathsf{ksk}$ honestly, computes $\mathsf{KeySwitch}(\mathsf{ksk},h_b)$, and adds an RLWE challenge in place of $\mathsf{Enc}_{\mathsf{pk}'}(\delta)$.
-        A real encryption of $\delta$ simulates $G_0$; a uniform pair simulates $G_1$.
+        The reduction uses the RLWE challenge public key as $\mathsf{pk}'$, so that
+        $\mathsf{pk}'$ is the same public key under which $\mathsf{ksk}$ is formed.
+        Concretely, it samples the old header secret $\mathsf{sk}_H$ itself, takes the
+        challenge public key as $\mathsf{pk}'$, honestly computes $\mathsf{ksk}$ as the
+        gadget encryptions of $\mathsf{sk}_H$ under that same $\mathsf{pk}'$, samples
+        the ephemeral $\delta$, computes $\mathsf{KeySwitch}(\mathsf{ksk},h_b)$, and
+        adds the RLWE challenge (embedded as an encryption of $\delta$, by adding
+        $\mathsf{SCALE}\cdot\delta$ to the second component) to
+        $\mathsf{KeySwitch}(\mathsf{ksk},h_b)$.
+        A real RLWE sample yields a real $\mathsf{Enc}_{\mathsf{pk}'}(\delta)$ and
+        simulates $G_0$; a uniform pair remains uniform after adding
+        $\mathsf{SCALE}\cdot\delta$ and simulates $G_1$.
         This also erases the algebraic test $h'-\mathsf{KeySwitch}(\mathsf{ksk},h_b)\stackrel{?}{=}\mathsf{Enc}_{\mathsf{pk}'}(\delta)$, which $\mathcal{A}$ could otherwise evaluate because $\mathsf{ksk}$ and both candidate headers $h_0,h_1$ are public.
         The distinguishing advantage is $\mathsf{Adv}^{\mathsf{RLWE}}_{\mathcal{B}_H}$.
 
@@ -606,7 +646,7 @@ This is a strictly weaker adversary than in Definition~\ref{def:ind-upd-cpa-pub}
 \paragraph*{What is not new, and what is.}
 We do not claim a new lattice assumption or a new KH-PRF.
 The PRF theorem is~\cite{BPR12,BLMR13}; the reduction from almost KH-PRF counter-mode to \emph{standard} UE confidentiality (tokens hidden at the challenge epoch) is the one used by~\cite{BLMR13,EPRS17,BDGJ20}.
-The additional claim is token-visible unlinkability of the masked ReEnc: a public $(\Delta,\mathsf{ksk})$ does not determine $\delta$, the header is rerandomized by Goldilocks-RLWE, and $c'-c-F_\Delta=F_\delta+e'$ is a Ring-LWR sample.
+The additional claim is token-visible unlinkability of the masked ReEnc: a public $(\Delta,\mathsf{ksk},\mathsf{pk}')$ does not determine $\delta$, the header is rerandomized by Goldilocks-RLWE, and $c'-c-F_\Delta=F_\delta+e'$ is a Ring-LWR sample.
 The $127$-update pad is a body-correctness bound; it is not a proven noise budget for the header after many key-switches, and the confidentiality hop for a single challenge $\mathsf{ReEnc}$ does not depend on that header budget.
 \end{proof}
 
@@ -669,11 +709,27 @@ $\mathcal{T}$ (epochs where the adversary queried a key-update transcript).
     return the recorded challenge-equal file-update transcript $\mathsf{ft}_i$ if present.
 \end{description}
 
-\paragraph{Trivial win~\cite{CGLT23}.}
-Key-update transcripts may update or downgrade challenge-equal ciphertexts (bi-directional leakage of our building blocks).
-Define the extended corruption set $\tilde{\mathcal{C}}$ by
-$i\in\tilde{\mathcal{C}}$ iff $i\in\mathcal{C}$, or $(i-1\in\mathcal{C}\land i\in\mathcal{T})$, or $(i+1\in\mathcal{C}\land i+1\in\mathcal{T})$.
-Any confidentiality experiment that ends with $\mathcal{K}\cap\tilde{\mathcal{C}}\neq\emptyset$ is a trivial win and returns $\bot$ (advantage ignored).
+\paragraph{Trivial win.}
+Key-update transcripts leak along a split key $(s,\mathsf{sk}_H)$, not a single
+bi-directional key as in~\cite{LT18,CGLT23}.
+We therefore refine the extended corruption sets consistently with
+Definition~\ref{def:ind-upd-cpa-pub}.
+Let $\mathcal{C}^*$ be the challenge-equal epochs obtained from $\mathcal{C}$ by
+the usual ciphertext/transcript inference of~\cite{CGLT23}
+(updated or downgraded challenge ciphertexts that enter the adversary's view).
+Let $\mathcal{K}^*$ be the split-key closure of $\mathcal{K}$ from
+Definition~\ref{def:ind-upd-cpa-pub}: inferring $s'$ from a corrupted $s$ and a
+public $\Delta$ does \emph{not} by itself place the new epoch in $\mathcal{K}^*$;
+epoch $e$ enters $\mathcal{K}^*$ if and only if the adversary can recover the
+decryption capability at $e$ (both $s_e$ and $\mathsf{sk}_H^e$, or equivalently
+can extract $\delta$ from a challenge header at $e$), in particular by corrupting
+$\mathsf{sk}_H^e$ or any later header key with a backward path along public tokens
+to $\mathsf{sk}_H^e$.
+Any confidentiality experiment that ends with $\mathcal{K}^*\cap\mathcal{C}^*\neq\emptyset$
+is a trivial win and returns $\bot$ (advantage ignored).
+The experiments in Definitions~\ref{def:ind-dd-up},~\ref{def:ind-fileup-cpa},
+and~\ref{def:ind-reenc-cpa} use this refined region in place of the single-key
+condition $\mathcal{K}\cap\tilde{\mathcal{C}}=\emptyset$ of~\cite{CGLT23}.
 
 \begin{definition}[IND-DD-UP~\cite{CGLT23}]
 \label{def:ind-dd-up}
@@ -685,7 +741,7 @@ Any confidentiality experiment that ends with $\mathcal{K}\cap\tilde{\mathcal{C}
   \item $(\mathsf{sb}^\star,\mathsf{repo}^\star)\gets\mathsf{Store}(\mathsf{db}_b,\mathsf{sk}_e,\mathsf{pp})$; set $e^\star\leftarrow e$; add $(e,\mathsf{sb}^\star,\mathsf{repo}^\star,\mathsf{db}_b)$ to $\mathcal{L}$;
         for each $i$ with $m_{0,i}\neq m_{1,i}$ add $i$ to $\mathcal{I}$.
   \item $b'\gets\mathcal{A}^{\mathcal{O}.\mathsf{Store},\mathcal{O}.\mathsf{Next},\mathcal{O}.\mathsf{FileUp},\mathcal{O}.\mathsf{KeyCorr},\mathcal{O}.\mathsf{KeyUpTrans},\mathcal{O}.\mathsf{ChaFTCorr},\mathcal{O}.\mathsf{ChaCTCorr}}(\mathsf{st},\mathsf{repo}^\star)$.
-  \item Return $b'$ if $\mathcal{K}\cap\tilde{\mathcal{C}}=\emptyset$, else $\bot$.
+  \item Return $b'$ if $\mathcal{K}^*\cap\mathcal{C}^*=\emptyset$, else $\bot$.
 \end{enumerate}
 USS is IND-DD-UP secure if for every PPT $\mathcal{A}$,
 \[
@@ -708,7 +764,7 @@ Intuitively: even with adaptive key/file/key-update corruptions (outside trivial
         Run FileUp of slot $i$ to $m_{b,i}$, obtaining $(\mathsf{sb}^\star,\mathsf{repo}^\star)$ and transcript $\mathsf{ft}$;
         add $(e,\mathsf{sb}^\star,\mathsf{repo}^\star,\mathsf{db}_b)$ to $\mathcal{L}$ where $\mathsf{db}_b$ replaces coordinate $i$ by $m_{b,i}$.
   \item $b'\gets\mathcal{A}^{\ldots,\mathcal{O}.\mathsf{ChaFTCorr},\mathcal{O}.\mathsf{ChaCTCorr}}(\mathsf{st},\mathsf{sb}^\star,\mathsf{repo}^\star,\mathsf{ft})$.
-  \item Return $b'$ if $\mathcal{K}\cap\tilde{\mathcal{C}}=\emptyset$, else $\bot$.
+  \item Return $b'$ if $\mathcal{K}^*\cap\mathcal{C}^*=\emptyset$, else $\bot$.
 \end{enumerate}
 USS is IND-FileUp-CPA secure if the analogous distinguishing advantage is negligible.
 Intuitively: a FileUp hides which of two equal-length replacement files was written, even if $\mathcal{A}$ knew the previous database.
@@ -724,7 +780,7 @@ Intuitively: a FileUp hides which of two equal-length replacement files was writ
         set $\mathcal{I}=\{i:c_{0,i}\neq c_{1,i}\}$, sample a fresh epoch key, set $e\leftarrow e+1$, $e^\star\leftarrow e$, $\mathcal{C}\leftarrow\mathcal{C}\cup\{e\}$.
         Run KeyUp on repository $b$ to obtain $(\mathsf{sb}^\star,\mathsf{repo}^\star)$; honestly KeyUp every other repository as well.
   \item $b'\gets\mathcal{A}^{\mathcal{O}.\mathsf{Store},\mathcal{O}.\mathsf{Next},\mathcal{O}.\mathsf{FileUp},\mathcal{O}.\mathsf{KeyCorr},\mathcal{O}.\mathsf{KeyUpTrans},\mathcal{O}.\mathsf{ChaCTCorr}}(\mathsf{st},\mathsf{sb}^\star,\mathsf{repo}^\star,\{\text{all other updated }(\mathsf{sb}',\mathsf{repo}')\})$.
-  \item Return $b'$ if $\mathcal{K}\cap\tilde{\mathcal{C}}=\emptyset$, else $\bot$.
+  \item Return $b'$ if $\mathcal{K}^*\cap\mathcal{C}^*=\emptyset$, else $\bot$.
 \end{enumerate}
 USS is IND-REENC-CPA secure if the distinguishing advantage is negligible.
 Intuitively: after KeyUp, $\mathcal{A}$ cannot tell which of two previously stored repositories was rotated (unlinkability / post-compromise security for the whole repository), even with FileUp oracles.
@@ -807,12 +863,20 @@ The server:
 \paragraph{$\mathsf{USS.KeyUp}(\mathsf{pp}, \mathsf{sk}, \mathsf{sk}', \mathsf{repo})$.}
 Let $\mathsf{sk}=(k, s, \mathsf{sk}_H)$ and $\mathsf{sk}'=(k', s', \mathsf{sk}_H')$. The client samples $\rho_0$ and sends
 $\mathsf{token}=(\Delta_{\mathrm{R}}=k'/k,\; Y'=k'g_1,\; \rho_0,\; \Delta=s'-s,\; \mathsf{ksk})$,
-where $\mathsf{ksk}$ switches the mask header from $\mathsf{sk}_H$ to $\mathsf{sk}_H'$. The client updates its own stub, $\mathsf{stub}\leftarrow\mathsf{stub}+\rho_0[Z(\tau)]_1$. The server:
+where $\mathsf{ksk}$ switches the mask header from $\mathsf{sk}_H$ to $\mathsf{sk}_H'$.
+The new header public key $\mathsf{pk}'$ is published with $Y'$ as part of the new public key $\mathsf{pk}'_{\mathsf{USS}}=(Y',\mathsf{pk}')$, and is required by $\mathsf{UE.ReEnc}$.
+The client updates its own stub, $\mathsf{stub}\leftarrow\mathsf{stub}+\rho_0[Z(\tau)]_1$. The server:
 \begin{enumerate}
     \item Updates RISE openings using $\Delta_{\mathrm{R}}$ and adds $\mathsf{RISE.Enc}_{Y'}(\rho_0 \cdot W_j)$ to each opening.
-    \item Re-encrypts each file by $\mathsf{UE.ReEnc}(\Delta, \mathsf{ksk}, \cdot)$, sampling a fresh $\delta$ per file.
+    \item Re-encrypts each file by $\mathsf{UE.ReEnc}(\Delta, \mathsf{ksk}, \mathsf{pk}', \cdot)$, sampling a fresh $\delta$ per file.
 \end{enumerate}
-The measured token is $266384$ bytes: $\Delta$ ($4096$), the RISE fields and $\rho_0$ and a $32$-byte epoch word ($144$), and a $16$-digit RLWE key-switching key ($262144$). It does not grow with the file size.
+The measured KeyUp payload is $266384$ bytes: $\Delta$ ($4096$), the RISE fields
+and $\rho_0$ and a $32$-byte epoch word ($144$), and a $16$-digit RLWE
+key-switching key ($262144$).
+This figure excludes the header public key $\mathsf{pk}'$, which is published
+with $Y'$ and has size $|\mathsf{pk}'|=2N\cdot 8=16384$ bytes; $\mathsf{ksk}$
+does not determine $\mathsf{pk}'=(a,b)$.
+The payload does not grow with the file size.
 
 \subsection{Security Proofs}
 
@@ -948,12 +1012,14 @@ Any PPT adversary $\mathcal{A}$ against IND-REENC-CPA that triggers at most $t\l
 \mathsf{Adv}^{\mathsf{IND\text{-}REENC\text{-}CPA}}_{\mathcal{A}}
 \le
 \mathsf{Adv}^{\mathsf{RISE\text{-}UPD}}_{\mathcal{B}_1}
-+n\cdot\bigl(\mathsf{Adv}^{\mathsf{RLWE}}_{\mathcal{B}_H}
++n Q_{\mathsf{upd}}\cdot\bigl(\mathsf{Adv}^{\mathsf{RLWE}}_{\mathcal{B}_H}
 +\mathsf{Adv}^{\mathsf{RLWR}}_{\mathcal{B}_2}\bigr)
 +\frac{n}{p},
 \]
 where $\mathcal{B}_1$ attacks RISE rand-IND-UPD in $\GG_1$, $\mathcal{B}_H$ attacks Goldilocks-RLWE (header rerandomization for one file), and $\mathcal{B}_2$ attacks decisional Ring-LWR for one file's ephemeral mask $\delta$.
+Here $Q_{\mathsf{upd}}$ is the number of honest KeyUps of the challenge repository that enter the adversary's view (the challenge KeyUp plus later $\mathcal{O}.\mathsf{Next}$ updates of that repository obtained via $\mathcal{O}.\mathsf{ChaCTCorr}$ or as returned updated stubs/repositories), and $Q_{\mathsf{upd}}\ge 1$.
 The adversary is given the KeyUp token $(\Delta_{\mathrm{R}},Y',\rho_0,\Delta,\mathsf{ksk})$, i.e.\ this is the public-token setting of Definition~\ref{def:ind-upd-cpa-pub}.
+The adversary also receives the new header public key $\mathsf{pk}'$, published with $Y'$ (Definition~\ref{def:ind-upd-cpa-pub}).
 \end{lemma}
 \begin{proof}
 We follow~\cite[Thm.~5]{CGLT23}, separating header/stub unlinkability from body unlinkability.
@@ -976,12 +1042,21 @@ Hybridize over the $n$ files. For a single file the two hops of Theorem~\ref{thm
   \item rewrite $c'_i-c_i=F_{\Delta+\delta_i}+e$ and replace $F_{\delta_i}$ by a uniform pad in $R_p$ ($\mathsf{Adv}^{\mathsf{RLWR}}_{\mathcal{B}_2}$).
 \end{itemize}
 After these hops the updated body of file $i$ is uniform and independent of which of the two candidate repositories was rotated.
-The trivial-win condition $\mathcal{K}\cap\tilde{\mathcal{C}}=\emptyset$ of Definition~\ref{def:ind-reenc-cpa} is exactly the condition used in Definition~\ref{def:ind-upd-cpa-pub}: in particular $\mathcal{A}$ does not obtain the challenge-epoch header key, so $\delta_i$ remains hidden.
-Summing over $n$ files costs $n(\mathsf{Adv}^{\mathsf{RLWE}}_{\mathcal{B}_H}+\mathsf{Adv}^{\mathsf{RLWR}}_{\mathcal{B}_2})$.
+The trivial-win region is the split-key closure of
+Definition~\ref{def:ind-upd-cpa-pub} (and the refined USS paragraph above),
+not the single-key bi-directional closure of~\cite{LT18,CGLT23}.
+In particular $\mathcal{K}^*\cap\mathcal{C}^*=\emptyset$ means that $\mathcal{A}$
+does not obtain the challenge-epoch header key $\mathsf{sk}_H'$ (nor a later
+header key with a backward path to it), so each $\delta_i$ remains hidden.
+Inferring $s'$ from a corrupted $s$ and the public $\Delta$ is not a trivial win
+and is already the setting of the public-token game.
+Each later honest KeyUp of the challenge repository is an independent copy of the same two hops and costs an additional $n(\mathsf{Adv}^{\mathsf{RLWE}}+\mathsf{Adv}^{\mathsf{RLWR}})$, hence the $Q_{\mathsf{upd}}$ factor.
+Summing over $n$ files and $Q_{\mathsf{upd}}$ honest KeyUps costs $n Q_{\mathsf{upd}}(\mathsf{Adv}^{\mathsf{RLWE}}_{\mathcal{B}_H}+\mathsf{Adv}^{\mathsf{RLWR}}_{\mathcal{B}_2})$.
 
 \paragraph*{Challenge bit.}
 The client stub is not part of the server view, so $\rho_0$ in the token does not give the adversary a commitment to match.
 After the header/stub hops and the $n$ body hops, the post-KeyUp repository on the server is independent of the hidden bit.
+Each later honest KeyUp of the challenge repository is an independent copy of the same two hops and costs an additional $n(\mathsf{Adv}^{\mathsf{RLWE}}+\mathsf{Adv}^{\mathsf{RLWR}})$, hence the $Q_{\mathsf{upd}}$ factor.
 Summing with the RISE advantage and the $n/p$ statistical failure of Theorem~\ref{thm:hide} yields the bound.
 \end{proof}
 
@@ -1140,7 +1215,7 @@ Evaluated using the \texttt{lattice-estimator}~\cite{APS15} (commit \texttt{53da
 
 \paragraph{Caching Optimizations.}
 Caching NTT representations of public polynomials $a_b$ requires $4\times$ the plaintext size in memory, but reduces key rotation time for $4 \times 1$\,GB files from $404$\,s (rebuilding $a_b$ on the fly) to $254$\,s.
-The KeyUp token is $266384$ bytes: $\Delta\in R_q$ ($4096$\,B), RISE $(Y',\Delta_R)$, $\rho_0$, and a $32$-byte epoch word ($144$\,B), plus the mask-header key-switching key ($262144$\,B). The body scan is still one ring product per block, so the previously measured KeyUp times are unchanged; the header refresh is once per file.
+The KeyUp token is $266384$ bytes: $\Delta\in R_q$ ($4096$\,B), RISE $(Y',\Delta_R)$, $\rho_0$, and a $32$-byte epoch word ($144$\,B), plus the mask-header key-switching key ($262144$\,B). This figure excludes the header public key $\mathsf{pk}'$, published with $Y'$, of size $|\mathsf{pk}'|=16384$ bytes. The body scan is still one ring product per block, so the previously measured KeyUp times are unchanged; the header refresh is once per file.
 
 \subsection{End-to-End USS Performance}
 \label{sec:eval_uss}
@@ -1233,7 +1308,7 @@ $n$ Files & File Size ($|m_i|$) & \textsf{ParGen} & \textsf{Store} & \textsf{Rev
 \end{table}
 
 \paragraph{Repository Key Rotation Trade-Offs.}
-Table~\ref{tab:uss-cmp} highlights the primary trade-offs of KHVC-USS during key rotation of a $4 \times 1$\,GB repository. While raw client-side AES re-encryption is faster ($17.9$\,s), it requires transmitting the full $4.0$\,GB payload over the network and lacks server-side out-of-date plaintext integrity ($\mathrm{OF\text{-}PTXT}$). In contrast, KHVC-USS completes key rotation on the server in $254$\,s while requiring only a $266384$-byte transfer over the network---about an $8.7\times$ wall-clock improvement over the extrapolated SHINE0-on-bodies baseline ($37$\,min) and far larger against RISE-on-bodies ($4.6$\,h), noting that those algebraic figures are scaled from 1\,MB microbenchmarks rather than measured end-to-end on 4\,GB. As summarized in Table~\ref{tab:uss_micro}, processing time scales linearly with total payload size under the Ring-LWR DEM.
+Table~\ref{tab:uss-cmp} highlights the primary trade-offs of KHVC-USS during key rotation of a $4 \times 1$\,GB repository. While raw client-side AES re-encryption is faster ($17.9$\,s), it requires transmitting the full $4.0$\,GB payload over the network and lacks server-side out-of-date plaintext integrity ($\mathrm{OF\text{-}PTXT}$). In contrast, KHVC-USS completes key rotation on the server in $254$\,s while requiring only a $266384$-byte transfer over the network (excluding the $16384$-byte header public key published with $Y'$)---about an $8.7\times$ wall-clock improvement over the extrapolated SHINE0-on-bodies baseline ($37$\,min) and far larger against RISE-on-bodies ($4.6$\,h), noting that those algebraic figures are scaled from 1\,MB microbenchmarks rather than measured end-to-end on 4\,GB. As summarized in Table~\ref{tab:uss_micro}, processing time scales linearly with total payload size under the Ring-LWR DEM.
 
 \section{Conclusion}
 \label{sec:conclusion}
@@ -1244,7 +1319,7 @@ Theoretically, our construction guarantees statistical position hiding (up to an
 For bulk file updates, our Ring-LWR DEM provides provable $\mathrm{IND\text{-}CPA}$ confidentiality across $127$ update epochs, with concrete generic-lattice estimator analysis placing the lowest-cost attack at $\approx 2^{319}$ operations—well above the $2^{128}$ security threshold. 
 
 Empirically, our single-slot \textsf{FileUp} algorithm achieves a $194$\,ms latency at $n=1024$ using closed-form one-hot opening proofs. 
-For a repository of four $1$\,GB files, end-to-end key updates complete in $254$\,s on the server with a $266384$-byte network transfer. 
+For a repository of four $1$\,GB files, end-to-end key updates complete in $254$\,s on the server with a $266384$-byte network transfer (excluding the $16384$-byte header public key published with $Y'$). 
 Overall, KHVC-USS demonstrates that integrity-aware, key-updatable secure storage can scale efficiently to real-world datasets without compromising on cryptographic security guarantees.
 
 

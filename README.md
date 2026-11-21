@@ -1,8 +1,22 @@
 # Scalable USS from KHVC
 
-Implementation and English paper for an optimized Updatable Secure Storage
-scheme built from a KZG-based homomorphic vector commitment (KHVC), with a
-Ring-LWR key-homomorphic PRF as the file-body DEM.
+The Rust prototype separates the client's current KHVC stub and blinding offset
+from the server repository. FileUp verifies the old record against that state
+before updating it. Each accepted FileUp independently blinds its opening
+increment and includes the same blind in the stub update. KeyUp shares a public block-polynomial sequence across
+repositories and refreshes independent, RLWE-encrypted file masks. The current
+record format has no per-file public tweak. The public KeyUp token does not
+include the client's blinding offset.
+
+The paper uses the four games from IACR ePrint 2023/1421 and replaces the
+single-transition exposure rule with its transitive closure. It proves OF-PTXT
+and gives an adaptive confidentiality reduction for an isolated suffix of
+epochs. The reduction permits keys from earlier epochs and transcript exposure
+within the suffix, assumes negligible honest verification failure, and does
+not cover key exposures within the suffix. The earlier zero-blind FileUp allowed a two-update source test. The current
+opening blind masks that difference, with regression coverage. The paper proves
+joint off-slot masking and an adaptive continuation for aligned opening states;
+the full adaptive payload reduction remains open.
 
 Repository: <https://github.com/longchenHefei/USS-Optimized-KZG>
 
@@ -22,21 +36,14 @@ cargo run --release --bin rlwrbench
 cargo run --release --bin bench -- --suite uss --smoke
 ```
 
-Large end-to-end runs (memory-aware for 1 GB bodies):
+For measurements of the shared-polynomial format:
 
 ```bash
-cargo run --release --bin bench -- --suite hvc --out experiments/results/hvc_sparse.csv
-cargo run --release --bin bench -- --suite ussmid --out experiments/results/uss_mid.csv
-cargo run --release --bin bench -- --suite uss1g  --out experiments/results/uss_e2e.csv
+cargo run --release --bin bench -- --suite uss --smoke --out experiments/results/uss_shared_smoke.csv
 ```
 
-CSV output: `experiments/results/{hvc,ue,uss,fair_ue,rlwr_ue,...}.csv`.
-
-## Headline numbers (Apple M5 Pro)
-
-- KHVC verification CRS at $n=1024$: 48.3 KB vs CF-HVC 50.5 MB
-- One-hot FileUp openings at $n=1024$, $k=1$: **194 ms** (was 1.62 s with dense FK20)
-- Ring-LWR DEM at 1 MB: ≈32.6 MB/s Enc/Upd, $2\times$ ciphertext, 4096-byte token
-- End-to-end USS KeyUp of $4\times 1$ GB: **254 s**, **266384-byte** token (4096-byte Ring-LWR $\Delta$ plus a 262144-byte RLWE mask key-switching key). Body update is still one ring product per block; the header is once per file.
-- End-to-end USS KeyUp of $8\times 100$ MB: **58.9 s** / 266384 B
-- End-to-end USS KeyUp of $64\times 1$ MB: **2.22 s** / 266384 B
+The 4 KiB smoke results are in `experiments/results/uss_shared_smoke.csv`.
+The encoded size is 282,704 bytes for the reusable epoch token plus a 32-byte
+opening shift per repository. Earlier USS CSVs used different record formats
+and are historical measurements. The revised format has not been measured at
+gigabyte scale.

@@ -368,7 +368,7 @@ fn run_uss_lowmem(rows: &mut Vec<String>, n: usize, fsize: usize) {
     let t0 = Instant::now();
     let pp = pargen(n, &mut rng);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},pargen,{:.4},{},lowmem",
+        "uss,KHVC-USS-shared,{n},{fsize},pargen,{:.4},{},lowmem",
         ms(t0.elapsed()),
         pp.khvc.crs_bytes()
     ));
@@ -379,46 +379,46 @@ fn run_uss_lowmem(rows: &mut Vec<String>, n: usize, fsize: usize) {
     for i in 0..n {
         let file = random_message(fsize, 1000 + i as u64);
         digests.push(Sha256::digest(&file));
-        staged.push(stage_file(&sk, &file, &mut rng));
+        staged.push(stage_file(&pp, &sk, &file, &mut rng));
         eprintln!("  staged file {i} in {:.1}s", t0.elapsed().as_secs_f64());
     }
-    let mut repo = seal(&pp, &sk, staged, &mut rng);
+    let (mut client, mut repo) = seal(&pp, &sk, staged, &mut rng);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},store,{:.4},{},lowmem",
+        "uss,KHVC-USS-shared,{n},{fsize},store,{:.4},{},lowmem",
         ms(t0.elapsed()),
         repo_bytes(&repo)
     ));
     let t0 = Instant::now();
-    let got = retrieve(&pp, &sk, &repo, 0).expect("rev");
+    let got = retrieve(&pp, &sk, &client, &repo, 0).expect("rev");
     assert_eq!(Sha256::digest(&got), digests[0]);
     drop(got);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},rev,{:.4},{},lowmem",
+        "uss,KHVC-USS-shared,{n},{fsize},rev,{:.4},{},lowmem",
         ms(t0.elapsed()),
         fsize
     ));
     let newf = random_message(fsize, 42);
     let new_digest = Sha256::digest(&newf);
     let t0 = Instant::now();
-    let tok = file_up(&pp, &sk, &mut repo, 0, &newf, &mut rng);
+    let tok = file_up(&pp, &sk, &mut client, &mut repo, 0, &newf, &mut rng).expect("verified fileup");
     drop(newf);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},fileup,{:.4},{tok},lowmem",
+        "uss,KHVC-USS-shared,{n},{fsize},fileup,{:.4},{tok},lowmem",
         ms(t0.elapsed())
     ));
-    let got = retrieve(&pp, &sk, &repo, 0).expect("rev after fileup");
+    let got = retrieve(&pp, &sk, &client, &repo, 0).expect("rev after fileup");
     assert_eq!(Sha256::digest(&got), new_digest);
     drop(got);
     let sk2 = keygen(&mut rng);
     let t0 = Instant::now();
-    let tok = key_up(&pp, &sk, &sk2, &mut repo, &mut rng);
+    let tok = key_up(&pp, &sk, &sk2, &mut client, &mut repo, &mut rng);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},keyup,{:.4},{tok},lowmem",
+        "uss,KHVC-USS-shared,{n},{fsize},keyup,{:.4},{tok},lowmem",
         ms(t0.elapsed())
     ));
-    let got = retrieve(&pp, &sk2, &repo, 0).expect("rev after keyup");
+    let got = retrieve(&pp, &sk2, &client, &repo, 0).expect("rev after keyup");
     assert_eq!(Sha256::digest(&got), new_digest);
-    assert!(retrieve(&pp, &sk, &repo, 2).is_none());
+    assert!(retrieve(&pp, &sk, &client, &repo, 2).is_none());
 }
 
 fn run_uss(rows: &mut Vec<String>, n: usize, fsize: usize, note: &str) {
@@ -428,7 +428,7 @@ fn run_uss(rows: &mut Vec<String>, n: usize, fsize: usize, note: &str) {
     let t0 = Instant::now();
     let pp = pargen(n, &mut rng);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},pargen,{:.4},{},{note}",
+        "uss,KHVC-USS-shared,{n},{fsize},pargen,{:.4},{},{note}",
         ms(t0.elapsed()),
         pp.khvc.crs_bytes()
     ));
@@ -437,34 +437,34 @@ fn run_uss(rows: &mut Vec<String>, n: usize, fsize: usize, note: &str) {
         .map(|i| random_message(fsize, 1000 + i as u64))
         .collect();
     let t0 = Instant::now();
-    let mut repo = store(&pp, &sk, &files, &mut rng);
+    let (mut client, mut repo) = store(&pp, &sk, &files, &mut rng);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},store,{:.4},{},{note}",
+        "uss,KHVC-USS-shared,{n},{fsize},store,{:.4},{},{note}",
         ms(t0.elapsed()),
         repo_bytes(&repo)
     ));
     let t0 = Instant::now();
-    let got = retrieve(&pp, &sk, &repo, 0).unwrap();
+    let got = retrieve(&pp, &sk, &client, &repo, 0).unwrap();
     assert_eq!(got, files[0]);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},rev,{:.4},{},{note}",
+        "uss,KHVC-USS-shared,{n},{fsize},rev,{:.4},{},{note}",
         ms(t0.elapsed()),
         fsize
     ));
     let newf = random_message(fsize, 42);
     let t0 = Instant::now();
-    let tok = file_up(&pp, &sk, &mut repo, 0, &newf, &mut rng);
+    let tok = file_up(&pp, &sk, &mut client, &mut repo, 0, &newf, &mut rng).expect("verified fileup");
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},fileup,{:.4},{tok},{note}",
+        "uss,KHVC-USS-shared,{n},{fsize},fileup,{:.4},{tok},{note}",
         ms(t0.elapsed())
     ));
-    assert_eq!(retrieve(&pp, &sk, &repo, 0).unwrap(), newf);
+    assert_eq!(retrieve(&pp, &sk, &client, &repo, 0).unwrap(), newf);
     let sk2 = keygen(&mut rng);
     let t0 = Instant::now();
-    let tok = key_up(&pp, &sk, &sk2, &mut repo, &mut rng);
+    let tok = key_up(&pp, &sk, &sk2, &mut client, &mut repo, &mut rng);
     rows.push(format!(
-        "uss,KHVC-USS,{n},{fsize},keyup,{:.4},{tok},{note}",
+        "uss,KHVC-USS-shared,{n},{fsize},keyup,{:.4},{tok},{note}",
         ms(t0.elapsed())
     ));
-    assert_eq!(retrieve(&pp, &sk2, &repo, 0).unwrap(), newf);
+    assert_eq!(retrieve(&pp, &sk2, &client, &repo, 0).unwrap(), newf);
 }

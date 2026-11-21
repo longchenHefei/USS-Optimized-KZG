@@ -188,12 +188,17 @@ fn decode_coeff(v: u32) -> u8 {
     (high & MSG_MASK) as u8
 }
 
-fn random_poly(rng: &mut impl RngCore) -> Vec<u64> {
+const UNIFORM_BOUND: u64 = u64::MAX - u64::MAX % Q;
+
+pub(crate) fn random_poly(rng: &mut impl RngCore) -> Vec<u64> {
     let mut a = vec![0u64; N];
     for x in &mut a {
-        let mut buf = [0u8; 8];
-        rng.fill_bytes(&mut buf);
-        *x = u64::from_le_bytes(buf) % Q;
+        *x = loop {
+            let word = rng.next_u64();
+            if word < UNIFORM_BOUND {
+                break word % Q;
+            }
+        };
     }
     a
 }
@@ -215,8 +220,11 @@ fn poly_from_tweak(tweak: &[u8], block: usize) -> Vec<u64> {
             }
             let mut buf = [0u8; 8];
             buf.copy_from_slice(chunk);
-            poly[filled] = u64::from_le_bytes(buf) % Q;
-            filled += 1;
+            let word = u64::from_le_bytes(buf);
+            if word < UNIFORM_BOUND {
+                poly[filled] = word % Q;
+                filled += 1;
+            }
         }
         counter += 1;
     }

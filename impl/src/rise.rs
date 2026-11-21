@@ -2,7 +2,7 @@
 
 use ark_bls12_381::{Fr, G1Projective};
 use ark_ec::PrimeGroup;
-use ark_ff::fields::Field;
+use ark_ff::{fields::Field, Zero};
 use ark_std::rand::RngCore;
 use ark_std::UniformRand;
 
@@ -26,7 +26,10 @@ pub struct RiseToken {
 
 impl RiseSk {
     pub fn keygen<R: RngCore>(rng: &mut R) -> (Self, RisePk) {
-        let sk = Fr::rand(rng);
+        let mut sk = Fr::rand(rng);
+        while sk.is_zero() {
+            sk = Fr::rand(rng);
+        }
         let y = G1Projective::generator() * sk;
         (Self(sk), RisePk(y))
     }

@@ -42,6 +42,12 @@ pub struct HdrCt {
     pub c2: Vec<u64>,
 }
 
+pub(crate) fn valid_ciphertext(ct: &HdrCt) -> bool {
+    ct.c1.len() == N
+        && ct.c2.len() == N
+        && ct.c1.iter().chain(&ct.c2).all(|&x| (x as u128) < QH)
+}
+
 #[derive(Clone)]
 pub struct SwitchKey {
     pub parts: Vec<HdrCt>,
@@ -188,9 +194,12 @@ fn add_poly(a: &[u64], b: &[u64]) -> Vec<u64> {
 fn uniform_poly(rng: &mut impl RngCore) -> Vec<u64> {
     let mut a = vec![0u64; N];
     for x in &mut a {
-        let mut buf = [0u8; 16];
-        rng.fill_bytes(&mut buf);
-        *x = (u128::from_le_bytes(buf) % QH) as u64;
+        *x = loop {
+            let word = rng.next_u64();
+            if (word as u128) < QH {
+                break word;
+            }
+        };
     }
     a
 }
@@ -199,8 +208,13 @@ fn ternary(rng: &mut impl RngCore) -> Vec<u64> {
     let mut a = vec![0u64; N];
     let mut buf = [0u8; 1];
     for x in &mut a {
-        rng.fill_bytes(&mut buf);
-        *x = match buf[0] % 3 {
+        let trit = loop {
+            rng.fill_bytes(&mut buf);
+            if buf[0] < 255 {
+                break buf[0] % 3;
+            }
+        };
+        *x = match trit {
             0 => 0,
             1 => 1,
             _ => neg_one(),
@@ -211,13 +225,7 @@ fn ternary(rng: &mut impl RngCore) -> Vec<u64> {
 
 /// Uniform mask secret in \(R_q\), the same ring as the Ring-LWR key.
 pub fn sample_sigma(rng: &mut impl RngCore) -> Vec<u64> {
-    let mut a = vec![0u64; N];
-    for x in &mut a {
-        let mut buf = [0u8; 8];
-        rng.fill_bytes(&mut buf);
-        *x = u64::from_le_bytes(buf) % Q;
-    }
-    a
+    rlwr_ue::random_poly(rng)
 }
 
 pub fn keygen(rng: &mut impl RngCore) -> (HdrSk, HdrPk) {
@@ -386,9 +394,8 @@ mod tests {
 
         let mut cur_sk = sk;
         let mut acc = sigma.clone();
-        // A 127-step run of this loop stays inside the rounding budget; the
-        // short loop below is the regression check.
-        for step in 0..8 {
+        // Exercise the header for the full body budget on this seeded run.
+        for step in 0..127 {
             let (nsk, npk) = keygen(&mut rng);
             let ksk = switch_key(&cur_sk, &npk, &mut rng);
             let delta = sample_sigma(&mut rng);

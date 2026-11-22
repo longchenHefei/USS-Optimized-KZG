@@ -13,7 +13,7 @@ Despite its strong theoretical security, existing USS constructions remain far f
 \end{enumerate}
 
 \subsection{Our Contributions.}
-In this paper, we bridge the gap between theoretical USS definitions and real-world performance by designing, instantiating, and evaluating a practical, high-throughput USS architecture for gigabyte-scale databases. Our primary contributions are summarized as follows:
+In this paper, we bridge the gap between theoretical USS definitions and real-world performance by designing, instantiating, and evaluating a practical, high-throughput USS architecture for gigabyte-scale databases. Our three contributions are summarized as follows, in the same order as the three technical sections~\ref{sec:khvc},~\ref{sec:model-repair}, and~\ref{sec:uss}:
 
 \begin{itemize}
     \item \textbf{Linear-SRS Homomorphic Vector Commitment ($\mathsf{KHVC}$):} 
@@ -22,14 +22,8 @@ In this paper, we bridge the gap between theoretical USS definitions and real-wo
     \item \textbf{Audit and repair of the CGLT23 confidentiality model:}
     We identify a soundness flaw in the literal one-hop exposure rule and prove that it admits a universal two-transition attack with advantage $1$ against every correct USS with public server-side updates. This is an impossibility statement about the published experiment, not a claim that the CGLT23 construction remains insecure after the model is repaired. We repair the experiment using transitive exposure closure, complete direct-disclosure bookkeeping, and public-length challenge domains. These changes do not restrict the lattice-based bulk-encryption construction.
 
-    \item \textbf{Full adaptive payload confidentiality in the repaired game:}
-    We prove IND-DD-UP, IND-FileUp-CPA, and IND-REENC-CPA in the full closure-revised game, without a suffix or challenge-isolation restriction. The reduction handles every exposure pattern allowed by closure, including later real-key disclosure in disconnected components and delayed FileUp transcripts. Its main technical steps are right-to-left shadow-header simulation, per-version multi-sample Ring-LWR body hybrids, and DDH sanitation of active opening ciphertexts. A joint wide-noise phase-residual simulation and explicit refresh arguments keep ordinary records consistent when they cross into a real exposed epoch.
-
-    \item \textbf{Shared block polynomials and wide-noise headers:}
-    All repositories use the same public Ring-LWR polynomial at a given block index, while independent file masks prevent reuse of an effective body key. Each file KeyUp adds independent wide noise to the refreshed header. We prove a joint statistical simulation bound for a hidden token with subsequent real-next-key disclosure, which is used at real-key boundaries in the full proof and is also of independent interest. The $N_H=16384$ baseline supports 127 rotations per file version and gives an accumulated bound of approximately $2^{-130.12}$ for 127 edges exposing at most 256 files each, at a cost of 1 MiB per-file header and a 65.004 MiB shared token.
-
-    \item \textbf{Verified FileUp, integrity, and evaluation:}
-    The client verifies the old slot against its private current state before computing a file update, and fresh opening blinding blocks the earlier two-FileUp source test. A direct OF-PTXT proof permits arbitrary epoch-key leakage. We report component benchmarks and a fresh smoke benchmark, distinguishing the earlier Rust header implementation from the revised wide-noise parameter baseline.
+    \item \textbf{New USS construction with full adaptive security:}
+    We instantiate the repaired model using KHVC, shared-polynomial Ring-LWR payload bodies, independent RLWE-encrypted file masks, and RISE restricted to constant-size openings. We prove IND-DD-UP, IND-FileUp-CPA, and IND-REENC-CPA in the full closure-revised game, without a suffix or challenge-isolation restriction. The reduction handles every exposure pattern allowed by closure, including later real-key disclosure in disconnected components and delayed FileUp transcripts, through right-to-left shadow-header simulation, per-version multi-sample Ring-LWR body hybrids, and DDH sanitation of active opening ciphertexts. Independent wide-noise header refreshes provide a joint statistical simulation bound across hidden rotations; the $N_H=16384$ baseline supports 127 rotations per file version and gives an accumulated bound of approximately $2^{-130.12}$ for 127 edges exposing at most 256 files each. Verified FileUp uses fresh opening blinding to block the earlier two-FileUp source test, and a direct OF-PTXT proof permits arbitrary epoch-key leakage. We also report component and end-to-end evaluations, distinguishing the earlier Rust header implementation from the revised wide-noise parameter baseline.
 
 \end{itemize}
 
@@ -37,19 +31,13 @@ In this paper, we bridge the gap between theoretical USS definitions and real-wo
 \subsection{Technical Overview}
 \label{sec:intro_technique_overview}
 
-To resolve the scalability and computational bottlenecks of prior USS schemes, we overhaul both the homomorphic commitment layer and the bulk data encryption layer. Below, we highlight the core technical ideas behind our key-homomorphic vector commitment ($\mathsf{KHVC}$) and high-throughput DEM instantiation.
+To resolve the scalability and computational bottlenecks of prior USS schemes, we overhaul the homomorphic commitment layer, repair the confidentiality experiment, and instantiate the bulk data encryption layer. Below, we highlight the three contributions in the order in which they appear in the body.
 
 \paragraph{Linear-SRS Homomorphic Vector Commitment ($\mathsf{KHVC}$).}
 The primary bottleneck in CGLT23~\cite{CGLT23} stems from Catalano--Fiore HVC, which relies on a quadratic $O(n^2)$ SRS to support position-hiding updates. 
 To achieve $O(n)$ SRS complexity, we construct $\mathsf{KHVC}$ over asymmetric pairing groups $\mathbb{G}_1, \mathbb{G}_2, \mathbb{G}_T$ equipped with a Type-3 bilinear map $e: \mathbb{G}_1 \times \mathbb{G}_2 \to \mathbb{G}_T$. 
 Given a message vector $\mathbf{m} = (m_1, \dots, m_n) \in \mathbb{F}_p^n$, the commitment is computed as $\mathcal{C} = g_1^{f(\tau)} \in \mathbb{G}_1$, where $f(X) = \sum_{i=1}^n m_i X^i$ is the polynomial encoding $\mathbf{m}$, and $\tau \in \mathbb{F}_p^*$ is the secret trapdoor. Crucially, we enforce an auxiliary state $\mathsf{aux} = \rho \in \mathbb{F}_p^*$ that remains constant-size ($O(1)$) and independent of the vector dimension $n$.
 Key updates require computing linear transformations over commitment elements. By structuring openings as standard KZG evaluation proofs $\pi_i = g_1^{(f(\tau) - m_i)/(\tau - i)}$ and blinding them with the client's ephemeral scalar $\rho$, $\mathsf{KHVC}$ guarantees that single-slot update tokens remain random group elements in $\mathbb{G}_1$. This achieves statistical position hiding up to an $n/p$ setup event, matching the security bound of $O(n^2)$ predecessors.
-
-\paragraph{Full adaptive simulation across exposure components.}
-The closure rule partitions directly exposed challenge epochs and all epochs connected to them by disclosed transitions into protected intervals. No key inside such an interval is exposed, and every crossing token is hidden. We guess only interval endpoints, with polynomial loss, and process all queries online. Within an interval, a right-to-left hybrid first replaces the real header public key, then each fresh public-key term, and finally installs a simulator-known shadow header secret. The already-converted internal outgoing edge therefore never requires the unknown real secret. At the final real-key boundary, joint wide-noise simulation reproduces ordinary header phase residuals, while honest RISE refresh randomness gives the exact new-epoch opening distribution. Multi-sample Ring-LWR and DDH hybrids sanitize active bodies and openings, and delayed transcripts are answered from fixed wire logs.
-
-\paragraph{Independent wide-noise simulation across a hidden rotation.}
-Each rotated file header also receives independent wide noise. On a hidden-token edge, zero-encryption first components reproduce only the public switching randomness; the simulator uses the real new secret to synthesize each second component directly with the correct accumulated mask and wide-noise phase. It never performs KeySwitch with zero second components. Independent wide shifts then mask all bounded non-wide residuals jointly, even when the real new secret is revealed. Remembering the simulator's previous wide shifts keeps the same bound usable over repeated rotations. This statistical lemma complements, but is not used as a substitute for, the full game-level reduction.
 
 \paragraph{Fast Single-Slot Evaluation via One-Hot Closed Forms.}
 A dense all-openings computation using FK20~\cite{FK20} costs $O(n\log n)$ group operations. For a one-hot update $\mathbf{\Delta}=(0,\dots,\Delta_i,\dots,0)$, Lemma~\ref{lem:onehot} instead gives every off-slot opening a closed form
@@ -59,8 +47,17 @@ A dense all-openings computation using FK20~\cite{FK20} costs $O(n\log n)$ group
 \]
 With the precomputed $W$ table, each off-slot update takes $O(1)$ group operations; the opening at the updated slot is computed by a length-$n$ MSM. Thus a complete FileUp that refreshes all $n-1$ off-slot openings remains $\Theta(n)$, rather than $O(1)$ overall. At $n=1024$, this path reduces our measured single-slot FileUp time from $1.62\,\mathrm{s}$ with dense FK20 to $194\,\mathrm{ms}$. Section~\ref{sec:eval_uss} separately compares this workload with the CF-HVC Open+Ver estimate and does not claim a single-slot speedup over that baseline.
 
+\paragraph{Audit and repair of the confidentiality experiment.}
+The literal CGLT23 one-hop rule expands a directly exposed challenge epoch across only one disclosed transition. Two disclosed transitions therefore leave the second destination outside the trivial-win set even after its key is corrupted, enabling the universal decrypt-and-compare attack of Theorem~\ref{thm:literal-one-hop}. We replace one-hop expansion by transitive exposure closure, register every direct disclosure of a challenge-equal ciphertext, and align challenge domains with public file lengths. The repaired game $\mathsf G_{\mathrm{cl}}$ imposes no suffix or challenge-isolation restriction and is the model used for all subsequent confidentiality claims.
+
 \paragraph{Ring-LWR body and private client blinding.}
 The earlier payload format published a file-specific tweak and preserved it during KeyUp. We replace it by a shared sequence $a_b=H_{\mathrm{ring}}(b)$ indexed only by block number. The per-file secret mask $\sigma$ makes the effective key $s+\sigma$ independent across newly encrypted files even though they share the same $a_b$. KeyUp applies a fresh mask increment to each file. The key-update message carries a shift for the encrypted openings. The client also refreshes a separate private scalar, so that the public stub difference cannot be computed from the key-update message. FileUp validates the old file before modifying either the digest vector or the private scalar.
+
+\paragraph{Full adaptive simulation across exposure components.}
+The closure rule partitions directly exposed challenge epochs and all epochs connected to them by disclosed transitions into protected intervals. No key inside such an interval is exposed, and every crossing token is hidden. We guess only interval endpoints, with polynomial loss, and process all queries online. Within an interval, a right-to-left hybrid first replaces the real header public key, then each fresh public-key term, and finally installs a simulator-known shadow header secret. The already-converted internal outgoing edge therefore never requires the unknown real secret. At the final real-key boundary, joint wide-noise simulation reproduces ordinary header phase residuals, while honest RISE refresh randomness gives the exact new-epoch opening distribution. Multi-sample Ring-LWR and DDH hybrids sanitize active bodies and openings, and delayed transcripts are answered from fixed wire logs.
+
+\paragraph{Independent wide-noise simulation across a hidden rotation.}
+Each rotated file header also receives independent wide noise. On a hidden-token edge, zero-encryption first components reproduce only the public switching randomness; the simulator uses the real new secret to synthesize each second component directly with the correct accumulated mask and wide-noise phase. It never performs KeySwitch with zero second components. Independent wide shifts then mask all bounded non-wide residuals jointly, even when the real new secret is revealed. Remembering the simulator's previous wide shifts keeps the same bound usable over repeated rotations. This statistical lemma complements, but is not used as a substitute for, the full game-level reduction.
 
 \subsection{Related Work}
 \label{sec:intro_related_work}
@@ -85,4 +82,3 @@ Our prototype uses Ring-LWR for the per-block body work and RLWE once per file f
 The USS framework introduced by CGLT23~\cite{CGLT23} provides end-to-end data privacy and integrity against malicious servers. 
 However, their concrete instantiation relies on Catalano--Fiore HVC, which suffers from a quadratic CRS size ($O(n^2)$) and renders large-scale deployments intractable. 
 This work delivers a linear-SRS ($O(n)$) HVC instantiation for USS, paired with an empirically measured large-file DEM for efficient bulk data rotation.
-

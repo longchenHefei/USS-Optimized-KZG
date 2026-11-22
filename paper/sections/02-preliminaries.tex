@@ -61,7 +61,7 @@ Because $\mathsf{RISE}$ is additively homomorphic over $\mathbb{G}_1$, it encaps
 \paragraph{Updatable Secure Storage (USS) Framework~\cite{CGLT23}.}
 An Updatable Secure Storage ($\mathsf{USS}$) system manages a database of $n$ outsourced files across client key update epochs. 
 $\mathsf{USS.Store}$ generates a ciphertext repository and a small local client state; $\mathsf{USS.Rev}$ retrieves and verifies file $i$; $\mathsf{USS.FileUp}$ updates single file contents; and $\mathsf{USS.KeyUp}$ performs server-side key rotations.
-We adapt the security definitions of CGLT23~\cite{CGLT23}: $\mathrm{IND\text{-}DD\text{-}UP}$ (Data Privacy under Direct Updates), $\mathrm{IND\text{-}FileUp\text{-}CPA}$ (Privacy under File Updates), $\mathrm{IND\text{-}REENC\text{-}CPA}$ (Privacy under Key Rotation), and $\mathrm{OF\text{-}PTXT}$ (ordered full plaintext integrity against a malicious server possessing leaked secret keys). Section~\ref{sec:uss} specifies our public/private stub interface, the exposure-closure correction, and the full closure-revised game used by our confidentiality theorem.
+We adapt the security definitions of CGLT23~\cite{CGLT23}: $\mathrm{IND\text{-}DD\text{-}UP}$ (Data Privacy under Direct Updates), $\mathrm{IND\text{-}FileUp\text{-}CPA}$ (Privacy under File Updates), $\mathrm{IND\text{-}REENC\text{-}CPA}$ (Privacy under Key Rotation), and $\mathrm{OF\text{-}PTXT}$ (ordered full plaintext integrity against a malicious server possessing leaked secret keys). Section~\ref{sec:model-repair} specifies our public/private stub interface, audits and repairs the exposure rule, and defines the full closure-revised game used by our confidentiality theorem.
 
 \subsection{System Instantiation Hypotheses}
 \label{sec:hyp}

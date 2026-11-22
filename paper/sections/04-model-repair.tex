@@ -1,0 +1,220 @@
+\section{Auditing and Repairing the CGLT23 Security Model}
+\label{sec:model-repair}
+
+This section isolates the model-level contribution. We first specify the USS interface and exact oracle accounting, then audit CGLT23's literal exposure rule and define the repaired games used by our construction. The impossibility result and the exposure-closure repair are independent of KHVC and of any particular payload-encryption instantiation.
+
+\subsection{USS Syntax and Challenger State}
+
+\paragraph{Public handles and private client state.}
+The \emph{public stub} (or handle) $\mathsf{sb}$ is always the commitment $C\in\mathbb G_1$, and only $\mathsf{sb}$ is returned to the adversary. The full client state is $\mathsf{cst}=(\mathsf{sb},\beta)$, where $\beta\in\mathbb F_p$ is private. The challenger retains $\mathsf{cst}$ and uses it for honest client operations. In particular, $\mathsf{KeyCorr}$ exposes an epoch key, not a repository's client state, and no oracle returns $\beta$, $\beta'$, or client random coins. This convention applies uniformly to confidentiality and integrity. A model that additionally exposes $\beta$ is strictly stronger and is not covered by our claims.
+
+\paragraph{Syntax.}
+An Updatable Secure Storage (USS) scheme consists of six algorithms:
+\begin{itemize}
+    \item $\mathsf{USS.ParGen}(1^\lambda,\mathcal M,n) \to \mathsf{pp}$: Takes the security parameter, the file message space $\mathcal M$, and the number of slots $n$. We omit $\mathcal M$ in the concrete algorithm, which accepts byte strings.
+    \item $\mathsf{USS.KeyGen}(\mathsf{pp}) \to (\mathsf{sk}, \mathsf{pk})$: Outputs client secret key $\mathsf{sk}$ and public key $\mathsf{pk}$.
+    \item $\mathsf{USS.Store}(\mathsf{pp}, \mathsf{sk}, \vec{m}) \to (\mathsf{sb},\mathsf{cst},\mathsf{repo})$: Encrypts dataset $\vec{m} = (m_1, \dots, m_n)$, returning the public handle, private client state, and server repository.
+    \item $\mathsf{USS.Rev}(\mathsf{pp},\mathsf{sk},\mathsf{cst},\mathsf{repo},i) \to m_i / \bot$: The client uses its own current $\mathsf{cst}$ to verify slot $i$ supplied by the server.
+    \item $\mathsf{USS.FileUp}(\mathsf{pp},\mathsf{sk},\mathsf{cst},\mathsf{repo},i,m'_i) \to (\mathsf{sb}',\mathsf{cst}',\mathsf{repo}')$: The client and server interact to replace slot $i$. We denote the protocol transcript by $\mathsf{ft}_i$.
+    \item $\mathsf{USS.KeyUp}(\mathsf{pp},\mathsf{sk},\mathsf{sk}',\mathsf{cst},\mathsf{repo}) \to (\mathsf{sb}',\mathsf{cst}',\mathsf{repo}')$: The client updates its state and sends a token for server-side key rotation. We record the protocol transcript separately from the outputs.
+\end{itemize}
+
+\paragraph{Security definitions.}
+We adapt CGLT23~\cite[Sec.~3.2, Figs.~1--4]{CGLT23} and state all departures explicitly below. A challenge-equal ciphertext is either the challenge ciphertext itself or a key-updated version of it. The repository containing these ciphertexts is the challenge-equal repository. The confidentiality oracles run both parties honestly. In the integrity experiment the adversary controls the server side of the interaction, while the client always uses its privately held current state.
+
+\paragraph{Challenger state~\cite{CGLT23}.}
+The challenger maintains:
+$e$ (current epoch, init.\ $1$);
+$e^\star$ (challenge epoch, init.\ $\bot$);
+$\mathsf{sb}^\star$ (public handle of the challenge-equal repository, init.\ $\bot$);
+$\mathcal{K}$ (epochs where the adversary corrupted the epoch key);
+$\mathcal{C}$ (epochs of directly exposed challenge-equal ciphertexts, whether returned in a challenge, by an oracle, or inside a transcript);
+$\mathcal{I}$ (indices of challenge-equal ciphertexts; empty before the challenge);
+$\mathcal{L}$ (tuples $(t,\mathsf{sb},\mathsf{cst},\mathsf{repo},\mathsf{db})$ tracking all repositories, including private states visible only to the challenger);
+$\mathcal{S}$ (tuples $(t,\mathsf{Trans})$ of key-update transcripts from epoch $t-1$ to $t$);
+$\mathcal{F}$ (tuples $(\mathsf{sb},t,i,\mathsf{ft}_i)$ of file-update transcripts on challenge-equal slots);
+$\mathcal{T}$ (destination epochs of successfully disclosed KeyUp transcripts).
+
+\paragraph{Confidentiality oracles: exact public outputs.}
+\begin{description}[leftmargin=1.4em,style=nextline]
+  \item[$\mathcal{O}.\mathsf{Store}(\mathsf{db})$]
+    run $(\mathsf{sb},\mathsf{cst},\mathsf{repo})\gets\mathsf{USS.Store}(\mathsf{pp},\mathsf{sk}_e,\mathsf{db})$, return only $(\mathsf{sb},\mathsf{repo})$, and add $(e,\mathsf{sb},\mathsf{cst},\mathsf{repo},\mathsf{db})$ to $\mathcal{L}$.
+  \item[$\mathcal{O}.\mathsf{Next}$]
+    sample a single new epoch key $\mathsf{sk}_{e+1}$. For each current entry $(e,\mathsf{sb},\mathsf{cst},\mathsf{repo},\mathsf{db})\in\mathcal{L}$, run KeyUp from $\mathsf{sk}_e$ to $\mathsf{sk}_{e+1}$, obtaining $(\mathsf{sb}',\mathsf{cst}',\mathsf{repo}')$ and its transcript. Collect the transcripts in $\mathsf{Trans}$.
+    Set $e\leftarrow e+1$, append the updated entries to $\mathcal{L}$ and store $(e,\mathsf{Trans})$ in $\mathcal{S}$;
+    if $\mathsf{sb}=\mathsf{sb}^\star$ then update $\mathsf{sb}^\star\leftarrow\mathsf{sb}'$;
+    return to $\mathcal{A}$ all updated public pairs $(\mathsf{sb}',\mathsf{repo}')$ for non-challenge repositories, and for the challenge-equal repository only $\mathsf{sb}'$ and ciphertexts with indices $j\notin\mathcal{I}$. Neither private states nor KeyUp transcripts are returned by this oracle.
+  \item[$\mathcal{O}.\mathsf{KeyCorr}(t)$]
+    if $1\le t\le e$, return only the epoch secret $\mathsf{sk}_t$ and add $t$ to $\mathcal{K}$. Otherwise return $\bot$. This does not return $\mathsf{cst}$ or any repository-specific $\beta$.
+  \item[$\mathcal{O}.\mathsf{KeyUpTrans}(t)$]
+    if $(t,\mathsf{Trans})\in\mathcal S$, return all recorded public KeyUp protocol messages for the transition $t-1\to t$ and add $t$ to $\mathcal{T}$. Otherwise return $\bot$. Their concrete, unlabeled format is specified in Section~\ref{sec:uss}.
+  \item[$\mathcal{O}.\mathsf{FileUp}(\mathsf{sb},m'_i,i)$]
+    return $\bot$ if $i\notin[1,n]$ or the current entry $(e,\mathsf{sb},\mathsf{cst},\mathsf{repo},\mathsf{db})$ is absent. Run FileUp using the challenger's private $\mathsf{cst}$. If the client rejects, return $\bot$ and leave the entry unchanged. Otherwise replace it with $(e,\mathsf{sb}',\mathsf{cst}',\mathsf{repo}',\mathsf{db}')$, where $\mathsf{db}'$ replaces slot $i$ by $m_i'$.
+    If $\mathsf{sb}\neq\mathsf{sb}^\star$, return $(\mathsf{sb}',\mathsf{repo}',\mathsf{ft}_i)$. Otherwise set $\mathsf{sb}^\star\leftarrow\mathsf{sb}'$ and check membership of $i$ in $\mathcal I$ \emph{before} removing it. If $i\in\mathcal I$, remove it and record $(\mathsf{sb},e,i,\mathsf{ft}_i)$ in $\mathcal F$. Return $\mathsf{sb}'$ and the updated ciphertexts with indices $j\notin\mathcal I$, including $\mathsf{ft}_i$ only if the overwritten slot was outside $\mathcal I$ before the update. No branch returns $\mathsf{cst}'$.
+  \item[$\mathcal{O}.\mathsf{ChaCTCorr}(j)$]
+    if $j\in\mathcal{I}$ and $\mathsf{sb}^\star\neq\bot$, add $e$ to $\mathcal{C}$ and return only the $j$-th ciphertext of the challenge-equal repository; else $\bot$.
+  \item[$\mathcal{O}.\mathsf{ChaFTCorr}(\mathsf{sb},t,i)$]
+    return the recorded public protocol transcript $\mathsf{ft}_i$ if present, or $\bot$ otherwise. If it contains the old challenge-equal ciphertext, add its encryption epoch $t$ to $\mathcal C$. Use its status when the transcript was recorded, even if the slot has since been overwritten. The transcript excludes $\beta$, $\beta'$, and uncommunicated client randomness.
+\end{description}
+
+Let $\mathcal O_{\mathrm{base}}$ consist of Store, Next, FileUp, KeyCorr, and KeyUpTrans. Let $\mathcal O_{\mathrm{full}}$ consist of these oracles together with ChaFTCorr and ChaCTCorr.
+
+\subsection{Audit of the Literal One-Hop Rule}
+
+\paragraph{The literal one-hop rule is unsound.}
+The published trivial-win rule in CGLT23~\cite[Sec.~3.2, p.~15]{CGLT23} extends the directly exposed set $\mathcal C$ by one transition in either direction: $i$ is added if $i-1\in\mathcal C$ and $i\in\mathcal T$, or if $i+1\in\mathcal C$ and $i+1\in\mathcal T$. Both tests refer to the original $\mathcal C$, rather than to the set already being extended. Here $t\in\mathcal T$ indexes the transition $t-1\to t$, as in the transcript oracle. This literal rule cannot be attained by any correct USS with ordinary public server-side updates.
+
+\begin{theorem}[Universal attack on the literal CGLT23 one-hop experiments]
+\label{thm:literal-one-hop}
+Let $\mathsf{USS}$ be correct and suppose that the public messages in a KeyUp transcript suffice to run its server-side ciphertext update. If there are two distinct equal-length files, then $\mathsf{USS}$ cannot have negligible advantage in any of the literal IND-DD-UP, IND-FileUp-CPA, or IND-REENC-CPA experiments using the one-hop rule above. In each experiment there is an adversary with advantage $1$.
+\end{theorem}
+\begin{proof}
+Fix a differing challenge slot $j$, and let $e_0$ be the epoch of its initially returned challenge ciphertext. Call $\mathsf{ChaCTCorr}(j)$ at $e_0$, so that $e_0\in\mathcal C$; this call is available in all three experiments and does not rely on Figure~1's omitted initial registration. Call $\mathsf{Next}$ twice and disclose $\mathsf{KeyUpTrans}(e_0+1)$ and $\mathsf{KeyUpTrans}(e_0+2)$. Thus $\mathcal T=\{e_0+1,e_0+2\}$. The published one-hop tests give
+\[
+ \widetilde{\mathcal C}=\{e_0,e_0+1\},
+\]
+because $e_0+2$ can be added only from $e_0+1\in\mathcal C$, whereas the original set contains only $e_0$. Now call $\mathsf{KeyCorr}(e_0+2)$. No other key is corrupted, so $\mathcal K\cap\widetilde{\mathcal C}=\varnothing$ and the experiment returns the adversary's guess rather than $\bot$.
+
+Use the two disclosed public transitions to update the challenge ciphertext from $e_0$ to $e_0+2$, and decrypt it with $\mathsf{sk}_{e_0+2}$. Correctness identifies the challenge bit with certainty; returning that bit gives advantage $1$. The attack uses only forward updates, no inverse update, and no property of RISE, Ring-LWR, RLWE, or a particular vector commitment. Consequently, changing the concrete USS algorithms cannot remove it while retaining correct public updatability.
+\end{proof}
+
+The theorem concerns the soundness of the literal security experiment. It does not assert that the CGLT23 construction remains insecure under a corrected exposure rule, nor does it depend on our KHVC or lattice-based instantiation.
+
+\subsection{Transitive Exposure Closure and Complete Bookkeeping}
+
+\paragraph{Multi-epoch exposure repair.}
+We therefore replace one-hop expansion by transitive exposure, the direct generalization needed to block arbitrarily long disclosed transition chains while retaining CGLT23's stated bidirectional-update intention. We do not claim a formal completeness or minimality theorem over all possible model repairs. Let $G_{\mathcal T}$ be the graph on the epochs created so far, with an undirected edge $\{t-1,t\}$ for each $t\in\mathcal T$. Define
+\[
+\widetilde{\mathcal C}=\operatorname{Reach}_{G_{\mathcal T}}(\mathcal C),\qquad
+\widetilde{\mathcal K}=\operatorname{Reach}_{G_{\mathcal T}}(\mathcal K).
+\]
+Reachability includes paths of length zero. Return $\bot$ exactly when $\mathcal K\cap\widetilde{\mathcal C}\ne\emptyset$, or equivalently $\widetilde{\mathcal K}\cap\widetilde{\mathcal C}\ne\emptyset$. The rule may be checked after every disclosure because the recorded sets are monotone. For example, $\mathcal C=\{1\}$, $\mathcal T=\{2,3\}$, and $\mathcal K=\{3\}$ is now excluded. The symmetric graph is a conservative exposure convention and does not require a mechanical inverse for every ciphertext update.
+
+This construction gives a separate reason to track backward key inference. With the new header secret, the highest gadget encryption in a disclosed switching key determines the old ternary header secret: its message coefficients are $0$ or $\pm16^{D-1}=\pm2^{252}$ for $D=64$, separated by much more than fresh ternary encryption noise. The RISE ratio and Ring-LWR difference also recover their old key components from the new ones. Thus a chain can propagate key knowledge even without running a ciphertext update in reverse.
+
+\paragraph{Direct-disclosure and public-length bookkeeping.}
+We record every actual disclosure of a challenge-equal ciphertext. This includes the initially returned IND-DD-UP repository and an old challenge ciphertext contained in a disclosed FileUp transcript, in addition to ChaCTCorr and the initial registrations in CGLT23's Figures~2--3. Omitting either disclosure would give the same decrypt-and-compare attack without any multi-epoch chain. OF-PTXT uses its own integrity experiment and excludes no key exposures.
+
+Byte lengths and block counts are public in the concrete scheme. For a public length pattern $\bar\ell=(\ell_1,\ldots,\ell_n)$, let
+\[
+ \mathcal D_{\bar\ell}=\{(m_1,\ldots,m_n):|m_i|=\ell_i\text{ for every }i\}.
+\]
+Each IND-DD-UP challenge pair is drawn from one such database domain, and the two IND-REENC-CPA candidate repositories must belong to the same domain. IND-FileUp-CPA retains CGLT23's explicit equal-length check. Ordinary Store and FileUp queries continue to accept arbitrary byte strings. This is a public message-space convention, not an exposure or suffix restriction. If CGLT23's $\mathcal M$ is read as a fixed-length space, it is already implicit; for variable-length files it is necessary, because otherwise the public ciphertext lengths distinguish the challenges in its Figures~1 and~3 without any oracle query.
+
+\paragraph{Two games and the scope of our claims.}
+Table~\ref{tab:game-models} separates the literal CGLT23 experiment, denoted $\mathsf G_{\mathrm{orig}}$, from the repaired experiment $\mathsf G_{\mathrm{cl}}$ proved here. There is no restricted suffix variant and no additional challenge-isolation condition. We do not claim security in $\mathsf G_{\mathrm{orig}}$: Theorem~\ref{thm:literal-one-hop} rules out such a claim for every correct publicly updatable USS.
+
+\begin{table}[htbp]
+\centering
+\caption{Literal CGLT23 experiments and the repaired model proved here. All changes to exposure bookkeeping and challenge domains are explicit.}
+\label{tab:game-models}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}YY@{}}
+\toprule
+ & $\mathsf G_{\mathrm{orig}}$ (literal CGLT23) & $\mathsf G_{\mathrm{cl}}$ (proved model) \\
+\midrule
+Transition expansion & One step from the original $\mathcal C$ using $\mathcal T$ & Transitive reachability from $\mathcal C$ \\
+Direct exposure & Fig.~1 omits initial challenge registration; Figs.~2--3 add the challenge epoch; ChaFTCorr does not register an old ciphertext & Every returned challenge-equal ciphertext is registered, including the initial repository and old ciphertexts in FileUp transcripts \\
+Public lengths & Fig.~2 checks equal lengths; Figs.~1 and~3 do not & One public length pattern for DD-UP and REENC candidates; Fig.~2's check is unchanged \\
+Client interface & Public stub $C$ and epoch secret $\mathsf{sk}$ & Public handle $C$, epoch secret $\mathsf{sk}$, and a construction-specific private repository offset $\beta$; KeyCorr returns only $\mathsf{sk}$ \\
+Adaptive queries & All oracles allowed by the relevant game & All oracles, with corrected bookkeeping and no suffix restriction \\
+Key-leakage test & $\mathcal K\cap\widetilde{\mathcal C}_{\mathrm{one\text{-}hop}}=\emptyset$ & $\mathcal K\cap\operatorname{Reach}_{G_{\mathcal T}}(\mathcal C)=\emptyset$ \\
+Challenge isolation & None beyond the one-hop rule & None beyond the closure rule \\
+Claimed here & Unattainable by Theorem~\ref{thm:literal-one-hop} & Theorem~\ref{thm:adaptive-full}: adaptive IND-DD-UP, IND-FileUp-CPA, and IND-REENC-CPA within the configured correctness budget \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The additional offset $\beta$ is repository-level client state, not an epoch key; the original model has no oracle that exposes uncommunicated client randomness or repository state. Section~\ref{sec:optimized-uss} explains why making it public would invalidate IND-REENC-CPA. This interface refinement is therefore stated as part of our construction rather than attributed to CGLT23. In particular, $\mathsf G_{\mathrm{cl}}$ permits key leakage after the challenge in components disconnected from every directly exposed challenge ciphertext. The proof treats those cases online and also permits delayed disclosure of every FileUp transcript allowed by the game.
+
+\subsection{Repaired Confidentiality and Integrity Definitions}
+
+\begin{definition}[IND-DD-UP: repaired CGLT23 game]
+\label{def:ind-dd-up}
+\par\noindent{\rm Experiment}
+\[
+\mathsf{Exp}^{\mathsf{IND\text{-}DD\text{-}UP}}_{\mathsf{USS},\mathcal{A}}(1^\lambda,\mathcal{M},n,b).
+\]
+\begin{enumerate}
+  \item $\mathsf{pp}\gets\mathsf{ParGen}(1^\lambda,\mathcal{M},n)$; initialize $e=1$, $e^\star=\mathsf{sb}^\star=\bot$ and empty $\mathcal{K},\mathcal{C},\mathcal{I},\mathcal{L},\mathcal{S},\mathcal{T},\mathcal{F}$; $\mathsf{sk}_1\gets\mathsf{KeyGen}(\mathsf{pp})$.
+  \item $(\mathsf{db}_0,\mathsf{db}_1,\mathsf{st})\gets\mathcal{A}^{\mathcal O_{\mathrm{base}}}(\mathsf{pp})$
+        with $\mathsf{db}_b=(m_{b,1},\dots,m_{b,n})\in\mathcal M^n$. The pair must belong to one public-length domain $\mathcal D_{\bar\ell}$; equivalently, $|m_{0,i}|=|m_{1,i}|=\ell_i$ for each $i$.
+  \item $(\mathsf{sb}^\star,\mathsf{cst}^\star,\mathsf{repo}^\star)\gets\mathsf{USS.Store}(\mathsf{pp},\mathsf{sk}_e,\mathsf{db}_b)$; set $e^\star\leftarrow e$ and add $(e,\mathsf{sb}^\star,\mathsf{cst}^\star,\mathsf{repo}^\star,\mathsf{db}_b)$ to $\mathcal{L}$. Set $\mathcal I=\{i:m_{0,i}\neq m_{1,i}\}$. When $\mathcal I\neq\emptyset$, add $e$ to $\mathcal C$: the next step exposes the whole challenge repository. This makes the trivial-win rule apply to the initial disclosure in CGLT23's Fig.~1.
+  \item $b'\gets\mathcal{A}^{\mathcal O_{\mathrm{full}}}(\mathsf{st},\mathsf{repo}^\star)$. No client state is returned.
+  \item Return $b'$ if $\mathcal{K}\cap\tilde{\mathcal{C}}=\emptyset$, else $\bot$.
+\end{enumerate}
+USS is IND-DD-UP secure if for every PPT $\mathcal{A}$,
+\[
+\mathsf{Adv}^{\mathsf{IND\text{-}DD\text{-}UP}}_{\mathsf{USS},\mathcal{A}}
+:=\bigl|\Pr[\mathsf{Exp}^{\mathsf{IND\text{-}DD\text{-}UP}}_{\mathsf{USS},\mathcal{A}}(1^\lambda,\mathcal{M},n,0)=1]
+-\Pr[\mathsf{Exp}^{\mathsf{IND\text{-}DD\text{-}UP}}_{\mathsf{USS},\mathcal{A}}(1^\lambda,\mathcal{M},n,1)=1]\bigr|
+\]
+is negligible.
+Intuitively: even with adaptive key/file/key-update corruptions (outside trivial wins), $\mathcal{A}$ cannot tell which of two equal-length databases was stored.
+\end{definition}
+
+\begin{definition}[IND-FileUp-CPA: repaired CGLT23 game]
+\label{def:ind-fileup-cpa}
+\par\noindent{\rm Experiment}
+\[
+\mathsf{Exp}^{\mathsf{IND\text{-}FileUp\text{-}CPA}}_{\mathsf{USS},\mathcal{A}}(1^\lambda,\mathcal{M},n,b).
+\]
+\begin{enumerate}
+  \item Setup as in Definition~\ref{def:ind-dd-up}.
+  \item $(\mathsf{sb},i,m_{0,i},m_{1,i},\mathsf{st})\gets\mathcal{A}^{\mathcal O_{\mathrm{base}}}(\mathsf{pp})$.
+        Abort if $(e,\mathsf{sb},\cdot,\cdot,\cdot)\notin\mathcal{L}$, or $i\notin[1,n]$, or $|m_{0,i}|\neq|m_{1,i}|$.
+  \item Retrieve $(e,\mathsf{sb},\mathsf{cst},\mathsf{repo},\mathsf{db})$; set $e^\star\leftarrow e$, $\mathcal{I}\leftarrow\mathcal{I}\cup\{i\}$, $\mathcal{C}\leftarrow\mathcal{C}\cup\{e\}$.
+        Run FileUp of slot $i$ to $m_{b,i}$, obtaining $(\mathsf{sb}^\star,\mathsf{cst}^\star,\mathsf{repo}^\star)$ and transcript $\mathsf{ft}$. Return $\bot$ if the client rejects;
+        add $(e,\mathsf{sb}^\star,\mathsf{cst}^\star,\mathsf{repo}^\star,\mathsf{db}_b)$ to $\mathcal{L}$ where $\mathsf{db}_b$ replaces coordinate $i$ by $m_{b,i}$.
+  \item $b'\gets\mathcal{A}^{\mathcal O_{\mathrm{full}}}(\mathsf{st},\mathsf{sb}^\star,\mathsf{repo}^\star,\mathsf{ft})$. The returned $\mathsf{sb}^\star$ is only the public commitment.
+  \item Return $b'$ if $\mathcal{K}\cap\tilde{\mathcal{C}}=\emptyset$, else $\bot$.
+\end{enumerate}
+USS is IND-FileUp-CPA secure if the analogous distinguishing advantage is negligible.
+Intuitively: a FileUp hides which of two equal-length replacement files was written, even if $\mathcal{A}$ knew the previous database.
+\end{definition}
+
+\begin{definition}[IND-REENC-CPA: repaired CGLT23 game]
+\label{def:ind-reenc-cpa}
+\par\noindent{\rm Experiment}
+\[
+\mathsf{Exp}^{\mathsf{IND\text{-}REENC\text{-}CPA}}_{\mathsf{USS},\mathcal{A}}(1^\lambda,\mathcal{M},n,b).
+\]
+\begin{enumerate}
+  \item Setup as in Definition~\ref{def:ind-dd-up} (USS epoch counter starts at $e=1$).
+  \item $(\mathsf{sb}_0,\mathsf{sb}_1,\mathsf{st})\gets\mathcal{A}^{\mathcal O_{\mathrm{base}}}(\mathsf{pp})$.
+  \item Look up both selected repositories in $\mathcal L$ at the current epoch. Return $\bot$ if either entry is absent.
+        Their plaintext databases must belong to one public-length domain $\mathcal D_{\bar\ell}$, so their file lengths match slot by slot. Set $\mathcal{I}=\{i:c_{0,i}\neq c_{1,i}\}$, sample one fresh epoch key, and set $e\leftarrow e+1$, $e^\star\leftarrow e$, $\mathcal{C}\leftarrow\mathcal{C}\cup\{e\}$.
+        Run KeyUp on repository $b$ using its challenger-held client state to obtain $(\mathsf{sb}^\star,\mathsf{cst}^\star,\mathsf{repo}^\star)$ from the old and new epoch keys. Run KeyUp under the same keys on each old entry with $\mathsf{sb}\notin\{\mathsf{sb}_0,\mathsf{sb}_1\}$ and collect its public result in $U$. Add the challenge and ordinary updated entries, including their private states, to $\mathcal L$ and record the public transcripts for the challenged transition in $\mathcal S$.
+  \item $b'\gets\mathcal{A}^{\mathcal O_{\mathrm{base}},\mathcal{O}.\mathsf{ChaCTCorr}}(\mathsf{st},\mathsf{sb}^\star,\mathsf{repo}^\star,U)$. Only public handles and repositories are returned.
+  \item Return $b'$ if $\mathcal{K}\cap\tilde{\mathcal{C}}=\emptyset$, else $\bot$.
+\end{enumerate}
+USS is IND-REENC-CPA secure if the distinguishing advantage is negligible.
+Intuitively: after KeyUp, $\mathcal{A}$ cannot tell which of two previously stored repositories was rotated (unlinkability / post-compromise security for the whole repository), even with FileUp oracles.
+\end{definition}
+
+\begin{definition}[OF-PTXT~\cite{CGLT23}]
+\label{def:of-ptxt}
+The integrity challenger keeps a list $\mathcal{R}$ of the latest honest tuples $(\mathsf{sb},\mathsf{cst},\mathsf{db})$ (only the current epoch); $\mathsf{cst}$ is never returned to the adversary.
+The adversary (malicious server) gets:
+\begin{description}[leftmargin=1.4em,style=nextline]
+  \item[$\mathcal{O}.\mathsf{StoreINT}(\mathsf{db})$]
+    run Store, return only $(\mathsf{sb},\mathsf{repo})$, and add $(\mathsf{sb},\mathsf{cst},\mathsf{db})$ to $\mathcal{R}$.
+  \item[$\mathcal{O}.\mathsf{NextINT}$]
+    advance the epoch, sample a new key, and run the \emph{client} side of KeyUp on every current state. Return all new public stubs and client transcripts $\mathsf{Trans}_c$, but no private states; update every $(\mathsf{sb},\mathsf{cst},\mathsf{db})\in\mathcal{R}$ to $(\mathsf{sb}',\mathsf{cst}',\mathsf{db})$ (plaintexts unchanged).
+  \item[$\mathcal{O}.\mathsf{FileUpINT}(m'_i,i,\mathsf{sb})$]
+    if $\mathsf{sb}$ occurs in $\mathcal{R}$, run the client FileUp protocol with its current private state against the adversarial server (who may deviate arbitrarily); if the client accepts, update $\mathcal{R}$ to $(\mathsf{sb}',\mathsf{cst}',\mathsf{db}')$.
+  \item[$\mathcal{O}.\mathsf{KeyCorr}(t)$]
+    use the same $\mathcal O.\mathsf{KeyCorr}(t)$ interface as in the confidentiality games to return only $\mathsf{sk}_t$ for $1\le t\le e$. There is no confidentiality-style exclusion for leaked keys, and no repository client state is revealed.
+\end{description}
+\par\noindent{\rm Experiment $\mathsf{Exp}^{\mathsf{OF\text{-}PTXT}}_{\mathsf{USS},\mathcal{A}}(1^\lambda,\mathcal{M},n)$:}
+\begin{enumerate}
+  \item $\mathsf{pp}\gets\mathsf{ParGen}(1^\lambda,\mathcal M,n)$; initialize $\mathcal R=\emptyset$ and $e=1$; sample $\mathsf{sk}_1\gets\mathsf{KeyGen}(\mathsf{pp})$.
+  \item $(\mathsf{sb},i,\mathsf{st})\gets\mathcal{A}^{\mathcal{O}.\mathsf{StoreINT},\mathcal{O}.\mathsf{NextINT},\mathcal{O}.\mathsf{FileUpINT},\mathcal{O}.\mathsf{KeyCorr}}(\mathsf{pp})$.
+        Return $0$ if $(\mathsf{sb},\cdot,\cdot)\notin\mathcal{R}$ or $i\notin[1,n]$.
+  \item Run the client side of $\mathsf{Rev}$ with the selected current private state $\mathsf{cst}$ against $\mathcal{A}$ as the server. Obtain $m_i^\star$.
+  \item Return $1$ iff $m_i^\star\neq\bot$ and there is a matching entry $(\mathsf{sb},\mathsf{cst},\mathsf{db})\in\mathcal R$ for which $m_i^\star\neq\mathsf{db}[i]$. Otherwise return $0$.
+\end{enumerate}
+USS is OF-PTXT secure if $\Pr[\mathsf{Exp}^{\mathsf{OF\text{-}PTXT}}_{\mathsf{USS},\mathcal{A}}=1]$ is negligible for every PPT $\mathcal{A}$.
+Intuitively: even a malicious server that knows the current epoch secret and may refuse to follow FileUp/KeyUp cannot make the client accept a plaintext that is not the latest honest version bound to the client's privately held current state.
+\end{definition}
+

@@ -57,10 +57,10 @@ In this paper, we bridge the gap between theoretical USS definitions and real-wo
 
 \begin{itemize}
     \item \textbf{Linear-SRS Homomorphic Vector Commitment ($\mathsf{KHVC}$):} 
-    We design $\mathsf{KHVC}$, a succinct KZG-based homomorphic vector commitment with an $O(n)$ Structured Reference String (SRS) that maintains a constant-size auxiliary string $\mathsf{aux} = \rho \in \mathbb{F}_p$. We formally prove its tight position binding under the $q$-SDH assumption and statistical position hiding. Furthermore, by deriving a closed-form algorithm for single-slot updates (\texttt{open\_one\_hot}), we bypass dense FK20 evaluation overhead during $\mathsf{FileUp}$ operations. Compared to the quadratic Catalano--Fiore HVC baseline at $n = 1024$, $\mathsf{KHVC}$ compresses the operational SRS from $50.5\,\text{MB}$ to $96.3\,\text{KB}$ ($512\times$ reduction) and speeds up setup from $70.2\,\text{s}$ to $0.38\,\text{s}$.
+    We design $\mathsf{KHVC}$, a succinct KZG-based homomorphic vector commitment with an $O(n)$ Structured Reference String (SRS) that maintains a constant-size auxiliary string $\mathsf{aux} = \rho \in \mathbb{F}_p$. We formally prove its tight position binding under the $q$-SDH assumption and statistical position hiding. Furthermore, by deriving a closed-form algorithm for single-slot updates (\texttt{open\_one\_hot}), we reduce each off-slot opening update to $O(1)$ group operations and bypass dense FK20 evaluation; refreshing all $n-1$ off-slot openings in a complete FileUp still costs $\Theta(n)$ group operations. Compared to the quadratic Catalano--Fiore HVC baseline at $n = 1024$, $\mathsf{KHVC}$ compresses the operational SRS from $50.5\,\text{MB}$ to $96.3\,\text{KB}$ ($512\times$ reduction) and speeds up setup from $70.2\,\text{s}$ to $0.38\,\text{s}$.
 
-    \item \textbf{CGLT23 model audit and minimal repair:}
-    We give a constructive proof that the literal one-hop exposure rule is unsound for every correct USS with public server-side updates: two disclosed forward transitions and the destination key determine the challenge bit while passing the published trivial-win test. We consequently register every direct ciphertext disclosure, apply transitive exposure closure, and use public-length challenge domains. These are repairs to the experiment, not restrictions on lattice-based bulk encryption.
+    \item \textbf{Audit and repair of the CGLT23 confidentiality model:}
+    We identify a soundness flaw in the literal one-hop exposure rule and prove that it admits a universal two-transition attack with advantage $1$ against every correct USS with public server-side updates. This is an impossibility statement about the published experiment, not a claim that the CGLT23 construction remains insecure after the model is repaired. We repair the experiment using transitive exposure closure, complete direct-disclosure bookkeeping, and public-length challenge domains. These changes do not restrict the lattice-based bulk-encryption construction.
 
     \item \textbf{Full adaptive payload confidentiality in the repaired game:}
     We prove IND-DD-UP, IND-FileUp-CPA, and IND-REENC-CPA in the full closure-revised game, without a suffix or challenge-isolation restriction. The reduction handles every exposure pattern allowed by closure, including later real-key disclosure in disconnected components and delayed FileUp transcripts. Its main technical steps are right-to-left shadow-header simulation, per-version multi-sample Ring-LWR body hybrids, and DDH sanitation of active opening ciphertexts. A joint wide-noise phase-residual simulation and explicit refresh arguments keep ordinary records consistent when they cross into a real exposed epoch.
@@ -92,9 +92,12 @@ The closure rule partitions directly exposed challenge epochs and all epochs con
 Each rotated file header also receives independent wide noise. On a hidden-token edge, zero-encryption first components reproduce only the public switching randomness; the simulator uses the real new secret to synthesize each second component directly with the correct accumulated mask and wide-noise phase. It never performs KeySwitch with zero second components. Independent wide shifts then mask all bounded non-wide residuals jointly, even when the real new secret is revealed. Remembering the simulator's previous wide shifts keeps the same bound usable over repeated rotations. This statistical lemma complements, but is not used as a substitute for, the full game-level reduction.
 
 \paragraph{Fast Single-Slot Evaluation via One-Hot Closed Forms.}
-During a $\textsf{FileUp}$ operation at slot $i$, updating a single position in a vector of dimension $n$ naive KZG evaluation requires re-computing quotient polynomials via \cite{FK20}, incurring $O(n \log n)$ group operations. 
-We observationally bypass this global polynomial division by leveraging the sparsity of the update vector $\mathbf{\Delta} = (0, \dots, \Delta_i, \dots, 0)$. 
-We derive a closed-form formula for the one-hot opening update (\texttt{open\_one\_hot}): the update proof simplifies to a single group exponentiation $\pi_i' = \pi_i \cdot (g_{1, i-1})^{\Delta_i}$ using pre-computed basis elements $g_{1, k} = g_1^{\tau^k}$. This reduces the single-slot update latency to $194\,\text{ms}$ at $n = 1024$, running nearly $3\times$ faster than sparse Catalano--Fiore updates.
+A dense all-openings computation using FK20~\cite{FK20} costs $O(n\log n)$ group operations. For a one-hot update $\mathbf{\Delta}=(0,\dots,\Delta_i,\dots,0)$, Lemma~\ref{lem:onehot} instead gives every off-slot opening a closed form
+\[
+ \Lambda_j=\Delta_i\frac{\omega^i}{n}\frac{W_i-W_j}{\omega^i-\omega^j}+\rho W_j,
+ \qquad j\ne i .
+\]
+With the precomputed $W$ table, each off-slot update takes $O(1)$ group operations; the opening at the updated slot is computed by a length-$n$ MSM. Thus a complete FileUp that refreshes all $n-1$ off-slot openings remains $\Theta(n)$, rather than $O(1)$ overall. At $n=1024$, this path reduces our measured single-slot FileUp time from $1.62\,\mathrm{s}$ with dense FK20 to $194\,\mathrm{ms}$. Section~\ref{sec:eval_uss} separately compares this workload with the CF-HVC Open+Ver estimate and does not claim a single-slot speedup over that baseline.
 
 \paragraph{Ring-LWR body and private client blinding.}
 The earlier payload format published a file-specific tweak and preserved it during KeyUp. We replace it by a shared sequence $a_b=H_{\mathrm{ring}}(b)$ indexed only by block number. The per-file secret mask $\sigma$ makes the effective key $s+\sigma$ independent across newly encrypted files even though they share the same $a_b$. KeyUp applies a fresh mask increment to each file. The key-update message carries a shift for the encrypted openings. The client also refreshes a separate private scalar, so that the public stub difference cannot be computed from the key-update message. FileUp validates the old file before modifying either the digest vector or the private scalar.
@@ -121,7 +124,7 @@ Our prototype uses Ring-LWR for the per-block body work and RLWE once per file f
 \paragraph{Updatable Secure Storage.}
 The USS framework introduced by CGLT23~\cite{CGLT23} provides end-to-end data privacy and integrity against malicious servers. 
 However, their concrete instantiation relies on Catalano--Fiore HVC, which suffers from a quadratic CRS size ($O(n^2)$) and renders large-scale deployments intractable. 
-This work delivers the first linear-SRS ($O(n)$) HVC instantiation for USS, paired with an empirically measured large-file DEM for efficient bulk data rotation.
+This work delivers a linear-SRS ($O(n)$) HVC instantiation for USS, paired with an empirically measured large-file DEM for efficient bulk data rotation.
 
 \section{Preliminaries}
 \label{sec:prelim}
@@ -214,7 +217,7 @@ To overcome the quadratic parameter explosion while retaining strong position hi
 \begin{enumerate}
     \item \textbf{Linear-Size SRS via Roots of Unity:} We evaluate polynomials over the domain $\Omega = \{\omega^0, \dots, \omega^{n-1}\}$, defined by the $n$-th roots of unity, with the vanishes-on-$\Omega$ polynomial $Z(X) = X^n - 1$. Under this setting, standard KZG opening proofs need only a degree-$n$ Structured Reference String (SRS) consisting of $n+1$ elements in $\mathbb{G}_1$ and 2 elements in $\mathbb{G}_2$, cutting SRS complexity from $O(n^2)$ down to $O(n)$.
     \item \textbf{Zero-Overhead Statistical Position Hiding:} To satisfy the privacy requirement that an opening $\Lambda_i$ reveals no information about other vector slots $m_{j\neq i}$, we inject a random blinding scalar $\rho \leftarrow \mathbb{F}_p$ by defining $F(X) = f(X) + \rho Z(X)$, where $f(\omega^i) = m_i$. Since $Z(\omega^i) = 0$ for all $\omega^i \in \Omega$, adding $\rho Z(X)$ leaves evaluation results $F(\omega^i) = m_i$ completely intact. Consequently, position hiding is achieved statistically via a single scalar $\rho$, eliminating the need for additional $\mathbb{G}_2$ elements in the SRS.
-    \item \textbf{One-Hot Closed Form for Fast Updates:} Instead of performing dense $O(n \log n)$ FK20 proofs~\cite{FK20} over all $n$ slots during single-slot file updates ($\mathsf{FileUp}$), we precompute a key update table $W_j = [Z(\tau)/(\tau - \omega^j)]_1$ via a single $\mathbb{G}_1$ FFT during setup. We derive a closed-form formula for one-hot vector deltas, reducing off-slot opening updates to simple $O(1)$ scalar multiplications.
+    \item \textbf{One-Hot Closed Form for Fast Updates:} Instead of performing dense $O(n \log n)$ FK20 proofs~\cite{FK20} over all $n$ slots during single-slot file updates ($\mathsf{FileUp}$), we precompute a key update table $W_j = [Z(\tau)/(\tau - \omega^j)]_1$ via a single $\mathbb{G}_1$ FFT during setup. We derive a closed-form formula for one-hot vector deltas, reducing each off-slot opening update to $O(1)$ group operations. The complete single-slot FileUp still refreshes all $n-1$ off-slot openings and therefore takes $\Theta(n)$ group operations.
 \end{enumerate}
 
 \subsection{HVC Definitions}
@@ -464,8 +467,10 @@ because $e_0+2$ can be added only from $e_0+1\in\mathcal C$, whereas the origina
 Use the two disclosed public transitions to update the challenge ciphertext from $e_0$ to $e_0+2$, and decrypt it with $\mathsf{sk}_{e_0+2}$. Correctness identifies the challenge bit with certainty; returning that bit gives advantage $1$. The attack uses only forward updates, no inverse update, and no property of RISE, Ring-LWR, RLWE, or a particular vector commitment. Consequently, changing the concrete USS algorithms cannot remove it while retaining correct public updatability.
 \end{proof}
 
+The theorem concerns the soundness of the literal security experiment. It does not assert that the CGLT23 construction remains insecure under a corrected exposure rule, nor does it depend on our KHVC or lattice-based instantiation.
+
 \paragraph{Minimal multi-epoch exposure repair.}
-We therefore replace one-hop expansion by transitive exposure, which is the minimum repair consistent with CGLT23's stated bidirectional-update intention. Let $G_{\mathcal T}$ be the graph on the epochs created so far, with an undirected edge $\{t-1,t\}$ for each $t\in\mathcal T$. Define
+We therefore replace one-hop expansion by transitive exposure, the direct generalization needed to block arbitrarily long disclosed transition chains while retaining CGLT23's stated bidirectional-update intention. We do not claim a formal completeness or minimality theorem over all possible model repairs. Let $G_{\mathcal T}$ be the graph on the epochs created so far, with an undirected edge $\{t-1,t\}$ for each $t\in\mathcal T$. Define
 \[
 \widetilde{\mathcal C}=\operatorname{Reach}_{G_{\mathcal T}}(\mathcal C),\qquad
 \widetilde{\mathcal K}=\operatorname{Reach}_{G_{\mathcal T}}(\mathcal K).

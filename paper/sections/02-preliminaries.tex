@@ -1,0 +1,78 @@
+\section{Preliminaries}
+\label{sec:prelim}
+
+\subsection{Notation and Terminology}
+Let $\mathbb{F}_p$ denote the scalar field of the BLS12-381 elliptic curve (the group order).
+For an element $a \in \mathbb{F}_p$, we write $[a]_1 = a g_1 \in \mathbb{G}_1$ and $[a]_2 = a g_2 \in \mathbb{G}_2$ for fixed generators $g_1,g_2$.
+USS file slots are indexed $i\in\{1,\dots,n\}$; when interacting with $\mathsf{KHVC}$ (whose native indices run over $\{0,\dots,n-1\}$) we identify slot $i$ with root $\omega^{i-1}$.
+USS epochs start at $1$ as in~\cite{CGLT23}.
+Throughout we distinguish:
+\begin{itemize}
+    \item $\rho \in \mathbb{F}_p$: the blinding scalar of $\mathsf{KHVC}$.
+    \item $r \in \mathbb{F}_p$: ephemeral RISE encryption randomness.
+    \item $\nu_i \in \{0,1\}^{256}$: the 256-bit nonce bound into the file commitment at slot $i$.
+    \item The integer $q$ in the $q$-SDH assumption equals the polynomial degree bound $n$; it is \emph{unrelated} to the Ring-LWR modulus $q=998244353$ of Section~\ref{sec:ue}.
+    \item The BLS scalar field $\mathbb{F}_p$ is \emph{unrelated} to the Ring-LWR rounding modulus $p=2^{16}$ of Section~\ref{sec:ue}; the overload is confined to that section, where no pairing field appears.
+\end{itemize}
+
+\subsection{Pairings and Hardness Assumptions}
+Let $e: \mathbb{G}_1 \times \mathbb{G}_2 \to \mathbb{G}_T$ be an asymmetric Type-3 bilinear pairing on BLS12-381. The security of our constructions relies on the following standard assumptions.
+
+\begin{assumption}[Symmetric External Diffie-Hellman, SXDH]
+\label{assump:sxdh}
+The Decisional Diffie-Hellman ($\mathrm{DDH}$) problem is computationally hard independently in both $\mathbb{G}_1$ and $\mathbb{G}_2$.
+\end{assumption}
+
+\begin{assumption}[$q$-Strong Diffie-Hellman, $q$-SDH~\cite{BB04,KZG10}]
+\label{assump:qsdh}
+Let $x$ be uniform in $\mathbb{F}_p^*$. A probabilistic polynomial-time (PPT) adversary is given
+\[
+([1]_1, [x]_1, \dots, [x^q]_1, [1]_2, [x]_2).
+\]
+It can output $(c,[1/(x+c)]_1)$ with $c\neq -x$ only with negligible probability.
+In our reduction, this tuple instantiates the $\mathsf{KHVC}$ Structured Reference String ($\mathrm{SRS}$) of degree $q = n$.
+\end{assumption}
+
+\subsection{Underlying Cryptographic Primitives}
+
+\paragraph{KZG Polynomial Commitments~\cite{KZG10}.}
+The $\mathsf{KZG.Setup}(1^\lambda, d)$ algorithm samples $\tau \leftarrow \mathbb{F}_p^*$ and publishes $([1]_1, \dots, [\tau^d]_1, [1]_2, [\tau]_2)$. 
+A polynomial $f(X) \in \mathbb{F}_p[X]$ is committed as $C = [f(\tau)]_1$. 
+An evaluation proof at point $z$ is given by $\Lambda = [q(\tau)]_1$, where $q(X) = (f(X) - f(z)) / (X - z)$. 
+Evaluation binding reduces directly to $q$-SDH. 
+Commitments and evaluation proofs inherit additive homomorphism from the exponentiation operation.
+Notice that verification requires only $[1]_2$ and $[\tau]_2$, eliminating the need for $[\tau^d]_2$.
+
+
+\paragraph{RISE Updatable Encryption~\cite{LT18}.}
+$\mathsf{RISE}$ is an ElGamal-style Updatable Encryption ($\mathsf{UE}$) scheme over a prime-order group:
+\begin{itemize}
+    \item $\mathsf{Enc}_Y(M) = (rY,\, rG + M)$ under public key $Y = kG$ and ephemeral scalar $r \leftarrow \mathbb{F}_p$ (encryption uses only $Y$).
+    \item Given a transition token $(\Delta = k'/k,\, Y' = k'G)$ and fresh $r'\leftarrow\mathbb{F}_p$, the server updates $C=(C_1,C_2)$ to
+    \[
+      C' \;=\; \bigl(\Delta\cdot C_1 + r'Y',\;\; C_2 + r'G\bigr).
+    \]
+    Decryption under $k'$ recovers $M$ because $\Delta\cdot C_1 = rY'$ and thus $C'_2 - (k')^{-1}C'_1 = M$.
+\end{itemize}
+Lehmann and Tackmann proved that $\mathsf{RISE}$ achieves $\mathrm{IND\text{-}ENC}$ and $\mathrm{rand\text{-}IND\text{-}UPD}$ security under $\mathrm{DDH}$.
+We instantiate $\mathsf{RISE}$ in $\mathbb{G}_1$ under $\mathrm{SXDH}$.
+Because $\mathsf{RISE}$ is additively homomorphic over $\mathbb{G}_1$, it encapsulates $\mathsf{HVC}$ openings; it is not intended for large payloads.
+
+\paragraph{Updatable Secure Storage (USS) Framework~\cite{CGLT23}.}
+An Updatable Secure Storage ($\mathsf{USS}$) system manages a database of $n$ outsourced files across client key update epochs. 
+$\mathsf{USS.Store}$ generates a ciphertext repository and a small local client state; $\mathsf{USS.Rev}$ retrieves and verifies file $i$; $\mathsf{USS.FileUp}$ updates single file contents; and $\mathsf{USS.KeyUp}$ performs server-side key rotations.
+We adapt the security definitions of CGLT23~\cite{CGLT23}: $\mathrm{IND\text{-}DD\text{-}UP}$ (Data Privacy under Direct Updates), $\mathrm{IND\text{-}FileUp\text{-}CPA}$ (Privacy under File Updates), $\mathrm{IND\text{-}REENC\text{-}CPA}$ (Privacy under Key Rotation), and $\mathrm{OF\text{-}PTXT}$ (ordered full plaintext integrity against a malicious server possessing leaked secret keys). Section~\ref{sec:uss} specifies our public/private stub interface, the exposure-closure correction, and the full closure-revised game used by our confidentiality theorem.
+
+\subsection{System Instantiation Hypotheses}
+\label{sec:hyp}
+
+To ensure complete self-containment, the full protocol instantiation and formal proofs in subsequent sections rest upon the following hypotheses:
+\begin{enumerate}
+    \item \textbf{Pairing Environment:} Asymmetric Type-3 pairing $e: \mathbb{G}_1 \times \mathbb{G}_2 \to \mathbb{G}_T$ over BLS12-381, assuming $\mathrm{SXDH}$ (Assumption~\ref{assump:sxdh}).
+    \item \textbf{Vector Commitment SRS:} A trusted KZG $\mathrm{SRS}$ generated under Assumption~\ref{assump:qsdh} with $q = n$, where knowledge of toxic waste $\tau$ is destroyed immediately after setup.
+    \item \textbf{Random Oracles:} We model the file digest and the domain-separated hash expansion $a_b=H_{\mathrm{ring}}(b)$ as random oracles. In the implementation, the latter uses SHA-256 with a fixed domain label, the block number, a counter, and rejection sampling.
+    \item \textbf{Entropy and UE:} Nonces $\nu_i \in \{0,1\}^{256}$ with full 256-bit entropy; $\mathsf{RISE}$ instantiated in $\mathbb{G}_1$ under $\mathrm{SXDH}$~\cite{LT18}.
+    \item \textbf{Ring-LWR Parameters:} Multi-sample decisional $\text{R-LWR}$ over polynomial ring $R_q = \mathbb{Z}_q[X]/(X^N+1)$ with dimension $N = 1024$, modulus $q = 998244353$, rounding modulus $p = 2^{16}$, and one uniform secret per challenged file pad.
+    \item \textbf{RLWE Header Parameters:} Decisional Ring-LWE for $N_H=16384$, $Q_H=2^{256}-2719743$, independent ternary secrets and errors, and the sample counts in Section~\ref{sec:header-parameters}. Wide-noise coefficients are independent and uniform in $[-2^{204},2^{204}]$.
+    \item \textbf{Body and header noise budget:} Each body key update adds rounding noise with $\|e\|_\infty\le1$. Eight reserved bits per coefficient absorb up to 127 units of cumulative error, and the explicit header inequalities in Section~\ref{sec:ue} cover the same 127-rotation budget.
+\end{enumerate}

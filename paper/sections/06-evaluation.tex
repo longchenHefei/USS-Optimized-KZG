@@ -1,0 +1,238 @@
+\section{Implementation and Evaluation}
+\label{sec:impl_eval}
+
+In this section, we present the implementation details of \textsf{uss-khvc} and conduct a comprehensive evaluation of its constituents, comparing our KHVC backend, Ring-LWR DEM, and full USS system against existing baselines.
+
+\subsection{Implementation Details}
+\label{sec:impl}
+
+We implement \textsf{uss-khvc} as a unified Rust crate built upon \texttt{arkworks 0.5} (for BLS12-381 pairings and polynomial operations), \texttt{aes-gcm} (for baseline symmetric operations), and \texttt{curve25519-dalek 4.1} (for Ristretto group arithmetic).
+
+\paragraph{Core Architecture.}
+File bodies in \texttt{uss.rs} use the Ring-LWR DEM with one shared cache for $a_b$ NTTs. Its memory cost is at most eight bytes per coefficient for the largest file block count, rather than a separate table per file. During key updates (\textsf{KeyUp}), the server adds one pad $F_{\Delta+\delta}$ per block. The extra RLWE header is refreshed once per file, so the body scan stays a single ring product. Single-slot updates (\textsf{FileUp}) leverage our $O(n)$ \texttt{open\_one\_hot} routine for all openings, while dense updates employ FK20 for multi-opening proofs. To optimize performance, the crate dynamically selects the naive all-open algorithm for vector dimensions $n < 1024$, and switches to FK20 for $n \ge 1024$. The KHVC backend utilizes \texttt{Radix2EvaluationDomain} IFFTs alongside a custom $\mathbb{G}_1$ Cooley--Tukey FFT implementation.
+
+\paragraph{Baselines and Comparison Targets.}
+For comparison, we implement Catalano--Fiore HVC (CF-HVC) over Type-3 pairings, storing elements $h_i \in \mathbb{G}_1$, $\hat{h}_i \in \mathbb{G}_2$, and cross-terms $h_{i,j} \in \mathbb{G}_1$. We also evaluate existing Updatable Encryption (UE) schemes: SHINE~\cite{SHINEcode}, ReCrypt~\cite{ReCryptcode}, and nested AES, using published reference numbers for the RLWE-based KH-PRF of~\cite{BDGJ20} only as a qualitative reference (we do not re-benchmark that codebase here). Because RISE lacked a public implementation, we developed a Rust implementation within the same codebase to ensure consistent and fair benchmarking.
+
+\subsection{Experimental Setup}
+\label{sec:eval_setup}
+
+All benchmarks were executed on an Apple M5 Pro machine equipped with 24\,GB RAM and 15 threads, running macOS 26.6.2 and \texttt{rustc 1.97.1} with link-time optimization (\texttt{lto}) enabled.
+
+Microbenchmarks for UE schemes were conducted via \texttt{fairbench} (\path{experiments/results/fair_ue.csv}) and \texttt{rlwrbench} (\path{experiments/results/rlwr_ue.csv}). Reported latencies reflect median values over multiple runs (21 iterations for headers and 4\,KB files; 7 for 64\,KB; 3–5 for 1\,MB files) after discarding initial warm-up runs. Large file evaluations ($100$\,MB) for ReCrypt are extrapolated at $100\times$ its 1\,MB median, whereas slow algebraic schemes (e.g., RISE, SHINE0) are omitted at $100$\,MB due to high latency ($1$\,MB RISE encryption takes $2.6$\,s).
+
+\subsection{HVC Analysis: Linear vs. Quadratic CRS}
+\label{sec:eval_hvc}
+
+Table~\ref{tab:hvc} compares the storage and computational overhead of KHVC against Catalano--Fiore HVC (CF-HVC) across varying vector sizes $n$.
+
+\begin{table}[htbp]
+\centering
+\caption{Microbenchmarks comparing KHVC and Catalano--Fiore HVC (CF-HVC). Timings are reported in milliseconds. The CRS column measures verification SRS (\texttt{crs\_bytes}), excluding $\{W_j\}$ and including one 48-byte $[Z(\tau)]_1$. CF-HVC is omitted for $n \ge 4096$ due to prohibitive memory requirements.}
+\label{tab:hvc}
+\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+$n$ & Scheme & Verification CRS & Setup & Com & Open+Ver & All-Open (FK20 / Naive) \\
+\midrule
+64    & KHVC   & 3.3\,KB   & 17     & 0.86 & 2.20  & 62\,ms / 36\,ms \\
+64    & CF-HVC & 204\,KB   & 298    & 3.86 & 5.22  & 259\,ms \\
+256   & KHVC   & 12.3\,KB  & 79     & 1.03 & 2.24  & 326\,ms / 216\,ms \\
+256   & CF-HVC & 3.05\,MB  & 4475   & 15.5 & 16.8  & 3995\,ms \\
+1024  & KHVC   & 48.3\,KB  & 379    & 2.36 & 3.45  & 1624\,ms / 1694\,ms \\
+1024  & CF-HVC & 50.5\,MB  & 70249  & 61.8 & 63.0  & 63131\,ms \\
+4096  & KHVC   & 192\,KB   & 1734   & 6.39 & 7.07  & 7707\,ms \\
+16384 & KHVC   & 768\,KB   & 8200   & 17.9 & 18.0  & 36495\,ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{SRS Size Reduction.}
+At $n = 1024$, CF-HVC requires a $50.5$\,MB verification CRS, whereas KHVC requires only $48.3$\,KB—a $1070\times$ reduction. When accounting for full operational parameters (including KeyUp data), KHVC consumes $96.3$\,KB, yielding a $512\times$ parameter reduction. At $n = 16384$ ($2^{14}$), CF-HVC's quadratic scaling would require $12.8$\,GB of CRS, making it impractical for realistic deployments, whereas KHVC requires only $768$\,KB (and $\approx 1.5$\,MB operational parameters).
+
+\paragraph{Update Performance.}
+Performing \textsf{KeyUp} using precomputed $Z$-openings takes $63$\,ms at $n = 1024$ and $1.10$\,s at $n = 16384$, compared to $1.62$\,s and $36.5$\,s for a full FK20 all-open execution.
+
+\subsection{Payload Updatable Encryption Performance}
+\label{sec:eval_ue}
+
+Because algebraic schemes operate block-wise over group elements, their throughput characteristics differ significantly from symmetric ciphers. We decouple small header operations (1 group element) from bulk payload updates.
+
+\begin{table}[htbp]
+\centering
+\caption{Header UE latency (single group element) in median milliseconds. Tokens are compact and independent of file size.}
+\label{tab:ue_header}
+\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Scheme & $|m|$ & Enc & Upd & Dec & Token Size & Expansion ($|ct|/|m|$) \\
+\midrule
+RISE ($\mathbb{G}_1$)     & 48\,B & 0.24 & 0.36 & 0.12 & 80\,B & 2.00 \\
+SHINE0 (Ristretto) & 32\,B & 0.027 & 0.027 & 0.038 & 32\,B & 1.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Bulk payload UE throughput (MB/s). Algebraic schemes operate block-wise. KHVC-USS combines the Ring-LWR DEM (Table~\ref{tab:rlwr}) for bodies with RISE for openings.}
+\label{tab:ue_bulk}
+\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Scheme & Payload ($|m|$) & Enc & Upd & Dec & Enc Cost (ns/B) & Expansion ($|ct|/|m|$) \\
+\midrule
+RISE ($\mathbb{G}_1$)     & 4\,KB & 0.41 & 0.27 & 0.76 & 2428 & 2.02 \\
+SHINE0                   & 4\,KB & 1.99 & 1.97 & 1.41 & 503  & 1.00 \\
+ReCrypt-KHPRF (EC)       & 4\,KB & 1.28 & 1.28 & 7.25 & 782  & 2.00 \\
+AES-256-GCM              & 4\,KB & 237  & ---$^*$ & 239 & 4.21 & 1.01 \\
+Nested AES-GCM           & 4\,KB & 238  & 231  & 118$^{\dagger}$ & 4.20 & 1.01 \\
+\midrule
+RISE ($\mathbb{G}_1$)     & 1\,MB & 0.40 & 0.26 & 0.73 & 2490 & 2.00 \\
+SHINE0                   & 1\,MB & 1.93 & 1.92 & 1.37 & 519  & 1.00 \\
+ReCrypt-KHPRF (EC)       & 1\,MB & 1.29 & 1.30 & 7.52 & 776  & 2.00 \\
+AES-256-GCM              & 1\,MB & 241  & ---$^*$ & 241 & 4.16 & 1.00 \\
+Nested AES-GCM           & 1\,MB & 247  & 246  & 125$^{\dagger}$ & 4.05 & 1.00 \\
+\bottomrule
+\end{tabular}\\[0.3em]
+{\scriptsize $^*$ AES-GCM lacks a compact server token; updates require client re-encryption ($240$\,MB/s).\\
+$^{\dagger}$ Decryption measured after a single key rotation epoch (two nested AES layers).}
+\end{table}
+
+\paragraph{Header vs. Bulk Workloads.}
+For sub-millisecond header updates (Table~\ref{tab:ue_header}), RISE and SHINE0 provide efficient $O(1)$ token updates. However, for bulk payloads (Table~\ref{tab:ue_bulk}), algebraic UE schemes suffer from substantial latency overhead: on a 1\,MB file, AES-GCM achieves $241$\,MB/s ($4.16$\,ns/B), whereas SHINE0 ($1.93$\,MB/s), EC-ReCrypt ($1.29$\,MB/s), and RISE ($0.40$\,MB/s) are up to two to three orders of magnitude slower. Although nested AES achieves high throughput, decryption costs scale linearly with the number of key updates ($O(t)$), rendering it unsuitable over long operational lifetimes.
+
+\subsection{Ring-LWR DEM Evaluation}
+\label{sec:eval_rlwr}
+
+To accommodate bulk payload updates efficiently, we employ a Ring-LWR Data Encapsulation Mechanism (DEM) whose worst-case noise pad supports $t\le 127$ consecutive updates ($N=1024$, $q=998244353$, $p=2^{16}$). Eight bits per coefficient are reserved for noise, absorbing a maximum cumulative absolute error of $127$.
+
+\begin{table}[htbp]
+\centering
+\caption{Single-threaded Ring-LWR body microbenchmarks. Public polynomial generation, RLWE headers, and repository processing are excluded.}
+\label{tab:rlwr}
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Payload & Enc (MB/s) & Upd (MB/s) & Dec (MB/s) & Enc (ns/B) & Expansion \\
+\midrule
+4\,KB  & 33.4 & 33.8 & 34.4 & 30.0 & 2.00 \\
+64\,KB & 33.0 & 32.8 & 33.7 & 30.3 & 2.00 \\
+1\,MB  & 32.6 & 32.6 & 32.9 & 30.7 & 2.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Noise Growth and Concrete Security.}
+Empirical verification across $64$ blocks showed maximum absolute rounding errors of $42$ after $64$ updates and $78$ after $128$ updates.
+The $128$-update trial is an \emph{observed} average-case stress test: the worst-case analytic bound $\|e\|_\infty\le t$ reaches $128$ on the $128$-th update and would overflow the $8$-bit pad, so the analytic body bound remains $t\le 127$ (where $|e|\le 127$ still fits).
+Both measured peaks stay strictly below $127$.
+Evaluated using the \texttt{lattice-estimator}~\cite{APS15} (commit \texttt{53da598}) with $m=2^{20}$ samples, the most efficient finite attack (BDD) requires $\approx 2^{319}$ operations (uSVP requires $\approx 2^{322}$, dual attack $\approx 2^{334}$), under the estimator model used for the body. This estimate does not cover the RLWE header.
+
+\subsection{Wide-Noise Header Security and Cost}
+\label{sec:header-parameters}
+
+We estimate the proposed header baseline using SageMath~10.8 and the \texttt{lattice-estimator}~\cite{APS15} (commit \texttt{53da598}). The secret and error coefficients are independent and uniform in $\{-1,0,1\}$, with standard deviation $\sqrt{2/3}$. Table~\ref{tab:header-estimator} reports $\log_2$ of estimated classical operation counts under the MATZOV cost model. Sample counts are separated by secret: an epoch public key gives one ring sample for its long-term secret, while one encryption gives two samples for its fresh encryption secret. Gadget ciphertexts and file headers with independent encryption randomness are not counted as samples under one shared secret. The displayed values are unchanged to two decimals for the tested $N_H$ and $2N_H$ scalar-equation counts and for a $321N_H$ sensitivity check.
+
+\begin{table}[htbp]
+\centering
+\caption{Classical header RLWE estimates ($\log_2$ operations). The minimum is among the completed estimates, not a USS security level.}
+\label{tab:header-estimator}
+\small
+\begin{tabular}{@{}rrrrrr@{}}
+\toprule
+$N_H$ & primal uSVP & primal BDD & dual & dual hybrid & Completed minimum \\
+\midrule
+8192 & 105.81 & \textbf{105.57} & 106.96 & 106.67 & \textbf{105.57} \\
+16384 & 225.53 & \textbf{225.09} & 226.77 & 225.47 & \textbf{225.09} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At $N_H=16384$, the primal-hybrid cross-check with $2N_H$ scalar equations also gives 225.09; the ADPS16/Core-SVP model gives 198.27 for single-instance uSVP. Dimensions 1024, 2048, and 4096 remain below 128 under uSVP alone. Thus 16384 is the first tested power-of-two dimension exceeding the classical 128-bit target in these estimates. This is a single-instance, generic-lattice-attack estimate: it does not include protocol auxiliary leakage or ring-specific attacks, and complete coded-BKW and MITM-hybrid numbers were not obtained.
+
+\begin{table}[htbp]
+\centering
+\caption{Uncompressed costs of the $N_H=16384$, 256-bit header baseline. Timings are Sage/NTL reference-arithmetic measurements, not Rust end-to-end results.}
+\label{tab:header-cost}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.56\textwidth}Y@{}}
+\toprule
+Item & Cost \\
+\midrule
+Per-file header (two polynomials) & $1{,}048{,}576$ B $=1$ MiB \\
+Per-epoch switching key ($D=64$) & 64 MiB \\
+Per-epoch new header public key & 1 MiB \\
+Body $\Delta$ and RISE token & 4096 B + 80 B \\
+Complete shared epoch token & $68{,}161{,}616$ B $=65.004$ MiB \\
+Additional opening shift per repository & 32 B \\
+Ring products per rotated file & 128 gadget + 2 fresh $=130$ \\
+Header arithmetic time (three runs) & 2.96, 3.10, 3.35 s; median 3.10 s/file \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The timing reference uses pregenerated inputs and excludes sampling, token generation, serialization, and body work; it does not use a specialized 256-bit header NTT. The 130 ring products therefore must not be interpreted as a measured Rust slowdown ratio. For 127 rotations, the header-rounding inequality uses 49.61\% of the available margin, the lifted message and noise have size at most $2^{249.90}$, and the multi-file simulation budget is approximately $2^{-130.12}$ under the edge restrictions of Lemma~\ref{lem:hidden-rotation}. The 1 MiB fixed per-file cost and 130 large-ring products are central practicality limitations, especially for small files and frequently rotated repositories.
+
+\subsection{End-to-End USS Performance}
+\label{sec:eval_uss}
+
+We measure the earlier shared-polynomial Rust implementation with the USS smoke suite. These runs use 4\,KiB files and exercise verified FileUp and a complete KeyUp with the previous 64-bit RLWE header. They do not implement or measure the wide-noise, $N_H=16384$ baseline of Section~\ref{sec:header-parameters}. The earlier bulk USS CSVs used a different format with a public tweak and do not measure this implementation either.
+
+\begin{table}[htbp]
+\centering
+\caption{Comparison between ASIACRYPT 2023 CF-USS and KHVC-USS.}
+\label{tab:uss-cf}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Metric & 2023 CF-USS & KHVC-USS (Ours) \\
+\midrule
+Verification CRS ($n=1024$)   & 50.5\,MB & 48.3\,KB ($1070\times$ reduction) \\
+Operational CRS ($n=1024$)    & 50.5\,MB & 96.3\,KB ($512\times$ reduction) \\
+Parameter Setup (\textsf{ParGen}, $n=1024$) & 70.2\,s & 0.38\,s ($185\times$ speedup) \\
+CRS Size ($n=16384$)          & 12.8\,GB & 768\,KB (Verification) / 1.5\,MB (Operational) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Opening computation for \textsf{FileUp} modifying $k$ slots at $n=1024$. The CF column extrapolates Open+Ver, a different workload.}
+\label{tab:fileup-k}
+\small
+\begin{tabular}{@{}rrrl@{}}
+\toprule
+$k$ Slots & CF-HVC (Estimated) & KHVC (Measured) & Algorithmic Source \\
+\midrule
+1   & $\approx 62$\,ms & 194\,ms & One-hot closed-form (KHVC) \\
+8   & $\approx 0.49$\,s & 1.67\,s & FK20 multi-open (KHVC) \\
+64  & $\approx 3.9$\,s  & 1.69\,s & FK20 multi-open (KHVC) \\
+1024 & 63.1\,s          & 1.67\,s & FK20 multi-open ($38\times$ speedup) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Partial File Updates (\textsf{FileUp}).}
+As shown in Table~\ref{tab:fileup-k}, for single-slot updates ($k=1$), our one-hot evaluation proof (Lemma~\ref{lem:onehot}) cuts opening latency from $1.62$\,s (using FK20) down to $194$\,ms.
+Relative to CF-HVC, however, $k=1$ and $k=8$ favor the baseline's estimated Open+Ver cost ($\approx 62$\,ms and $\approx 0.49$\,s): a KHVC one-hot FileUp must refresh all $n-1$ off-slot openings ($\Theta(n)$ scalar multiplications in $\mathbb{G}_1$), whereas the CF column reports only a single-slot Open+Ver estimate and does not charge a full server-side opening refresh.
+KHVC pulls ahead once $k$ is large enough that CF's per-slot work accumulates: the estimated crossover (KHVC measured vs.\ CF Open+Ver extrapolation) is $k^*\approx 27$, and at $k=n=1024$ KHVC is $38\times$ faster ($1.67$\,s vs.\ $63.1$\,s).
+For dense updates ($k\ge 8$) FK20 keeps KHVC near-constant at $\approx 1.67$\,s.
+
+\begin{table}[htbp]
+\centering
+\caption{Current KHVC-USS smoke benchmark in milliseconds. Each cell is a single run. The recorded KeyUp upload is 282736 bytes per repository when the epoch token is included.}
+\label{tab:uss_micro}
+\small
+\begin{tabular}{@{}rrrrrrr@{}}
+\toprule
+Files & File Size & \textsf{ParGen} & \textsf{Store} & \textsf{Rev} & \textsf{FileUp} & \textsf{KeyUp} \\
+\midrule
+8 & 4\,KiB & 1.83 & 14.30 & 2.29 & 5.99 & 107.02 \\
+32 & 4\,KiB & 7.35 & 61.46 & 2.31 & 13.84 & 438.06 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The raw output is \path{experiments/results/uss_shared_smoke.csv}, generated with \texttt{bench --suite uss --smoke}. When rotating multiple repositories under one epoch transition, the epoch token can be sent once and followed by one 32-byte opening shift per repository. The current measurements include the FileUp opening blind. The two added regression tests cover the two-FileUp candidate comparison for both sources and independent masks over successive updates. There are 22 passing Rust tests, including client verification, stale-record rejection, and subsequent KeyUp checks. These functional tests check implementation behavior and are not used as evidence for the game-based security proofs. The current measurements do not include a gigabyte-scale run.
+

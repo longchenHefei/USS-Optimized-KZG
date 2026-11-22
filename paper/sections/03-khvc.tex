@@ -1,0 +1,139 @@
+\section{KHVC: Linear-Size Homomorphic Vector Commitment}
+\label{sec:khvc}
+
+A Homomorphic Vector Commitment (HVC)~\cite{CGLT23} allows a client to commit to a vector of messages $\vec{m} = (m_0, \dots, m_{n-1}) \in \mathbb{F}_p^n$ via a succinct string $C$, generate openings $\Lambda_i$ proving that $m_i$ is the $i$-th entry, and dynamically update $C$ and $\Lambda_i$ as vector elements change. In the context of USS, HVC forms the core of the client's local stub to enforce version freshness. 
+
+However, existing HVC instantiations impose severe system overhead. The standard construction proposed by Catalano and Fiore (CF-HVC)~\cite{CF13} relies on precomputing all pairwise group products $g^{z_i z_j}$, resulting in a Common Reference String (CRS) of size $O(n^2)$. As $n$ scales to tens of thousands of files, this quadratic growth causes parameter generation times to explode into minutes and parameter sizes into gigabytes, creating a critical bottleneck for system startup and update operations.
+
+\paragraph{Design Strategy \& Technical Intuition.}
+To overcome the quadratic parameter explosion while retaining strong position hiding and binding, we design $\mathsf{KHVC}$, a succinct $O(n)$-size HVC built upon the Kate--Zaverucha--Goldberg (KZG) polynomial commitment framework~\cite{KZG10}. Our optimization is driven by three key insights:
+
+\begin{enumerate}
+    \item \textbf{Linear-Size SRS via Roots of Unity:} We evaluate polynomials over the domain $\Omega = \{\omega^0, \dots, \omega^{n-1}\}$, defined by the $n$-th roots of unity, with the vanishes-on-$\Omega$ polynomial $Z(X) = X^n - 1$. Under this setting, standard KZG opening proofs need only a degree-$n$ Structured Reference String (SRS) consisting of $n+1$ elements in $\mathbb{G}_1$ and 2 elements in $\mathbb{G}_2$, cutting SRS complexity from $O(n^2)$ down to $O(n)$.
+    \item \textbf{Zero-Overhead Statistical Position Hiding:} To satisfy the privacy requirement that an opening $\Lambda_i$ reveals no information about other vector slots $m_{j\neq i}$, we inject a random blinding scalar $\rho \leftarrow \mathbb{F}_p$ by defining $F(X) = f(X) + \rho Z(X)$, where $f(\omega^i) = m_i$. Since $Z(\omega^i) = 0$ for all $\omega^i \in \Omega$, adding $\rho Z(X)$ leaves evaluation results $F(\omega^i) = m_i$ completely intact. Consequently, position hiding is achieved statistically via a single scalar $\rho$, eliminating the need for additional $\mathbb{G}_2$ elements in the SRS.
+    \item \textbf{One-Hot Closed Form for Fast Updates:} Instead of performing dense $O(n \log n)$ FK20 proofs~\cite{FK20} over all $n$ slots during single-slot file updates ($\mathsf{FileUp}$), we precompute a key update table $W_j = [Z(\tau)/(\tau - \omega^j)]_1$ via a single $\mathbb{G}_1$ FFT during setup. We derive a closed-form formula for one-hot vector deltas, reducing each off-slot opening update to $O(1)$ group operations. The complete single-slot FileUp still refreshes all $n-1$ off-slot openings and therefore takes $\Theta(n)$ group operations.
+\end{enumerate}
+
+\subsection{HVC Definitions}
+
+\paragraph{Syntax.}
+A Homomorphic Vector Commitment (HVC) scheme for vectors of dimension $n$ consists of six algorithms:
+\begin{itemize}
+    \item $\mathsf{HVC.Setup}(1^\lambda, n) \to \mathsf{pp}$: Takes as input the security parameter $1^\lambda$ and vector size $n$, and outputs public parameters $\mathsf{pp}$.
+    \item $\mathsf{HVC.Com}(\mathsf{pp}, \vec{m}) \to (C, \mathsf{aux})$: Commits to a vector $\vec m\in\mathcal M^n$. The auxiliary information $\mathsf{aux}$ has size independent of $n$.
+    \item $\mathsf{HVC.Open}(\mathsf{pp}, \vec{m}, \mathsf{aux}, i) \to \Lambda_i$: Takes as input $\mathsf{pp}$, vector $\vec{m}$, auxiliary string $\mathsf{aux}$, and index $i \in \{0, \dots, n-1\}$, and outputs an opening proof $\Lambda_i$ proving that the $i$-th entry is $m_i$.
+    \item $\mathsf{HVC.Ver}(\mathsf{pp}, C, i, m_i, \Lambda_i) \to 1 / 0$: Takes as input $\mathsf{pp}$, commitment $C$, index $i$, message $m_i$, and proof $\Lambda_i$, and outputs $1$ if the proof is valid, or $0$ otherwise.
+    \item $\mathsf{HVC.ComHom}(\mathsf{pp}, C, C') \to C_{\mathrm{sum}}$: Takes as input two commitments $C, C'$ and outputs a homomorphically combined commitment $C_{\mathrm{sum}}$.
+    \item $\mathsf{HVC.OpenHom}(\mathsf{pp}, \Lambda_i, \Lambda'_i) \to \Lambda_{i, \mathrm{sum}}$: Takes as input two opening proofs $\Lambda_i, \Lambda'_i$ at the same index $i$, and outputs a homomorphically combined proof $\Lambda_{i, \mathrm{sum}}$.
+\end{itemize}
+
+\paragraph{Security Definitions.}
+An HVC scheme must satisfy position binding and statistical position hiding:
+\begin{itemize}
+    \item \textbf{Position Binding:} For all PPT adversaries $\mathcal{A}$, the probability that $\mathcal{A}$ produces a commitment $C$, index $i$, and two distinct messages $m \neq m'$ with valid proofs $\Lambda, \Lambda'$ is negligible:
+    \[
+    \Pr \left[ m \neq m' \land \mathsf{HVC.Ver}(\mathsf{pp}, C, i, m, \Lambda) = 1 \land \mathsf{HVC.Ver}(\mathsf{pp}, C, i, m', \Lambda') = 1 \right] \le \mathsf{negl}(\lambda).
+    \]
+    \item \textbf{Statistical Position Hiding~\cite[Fig.~6, Def.~7]{CGLT23}:} For target index $i^*$ and any two vectors $\vec{m}_0, \vec{m}_1$ that agree on all slots $j \neq i^*$, the challenger computes $(C_b,\mathsf{aux}_b)\gets\mathsf{HVC.Com}(\vec m_b)$ and openings $\Lambda_{b,j}$ for all $j\ne i^*$. The adversary's view is $\left(\mathsf{crs},C_b,\{\Lambda_{b,j}\}_{j\neq i^*}\right)$, together with its internal state. The auxiliary string $\mathsf{aux}_b$ is used by the challenger but is not part of this view. The distributions for $b=0$ and $b=1$ must be statistically indistinguishable.
+\end{itemize}
+
+\subsection{Concrete Construction}
+
+Let $\Omega = \{\omega^0, \dots, \omega^{n-1}\}$ be the $n$-th roots of unity, $Z(X) = X^n - 1$, and let $\mathbb{F}_p$ be the scalar field of BLS12-381.
+
+\paragraph{$\mathsf{HVC.Setup}(1^\lambda, n) \to \mathsf{pp}$.}
+Sample $\tau \leftarrow \mathbb{F}_p^*$ uniformly at random. Publish the degree-$n$ KZG SRS as part of $\mathsf{pp}$:
+\[
+\mathsf{SRS} = \left( [1]_1, [\tau]_1, \dots, [\tau^n]_1, [1]_2, [\tau]_2 \right) \in \mathbb{G}_1^{n+1} \times \mathbb{G}_2^2.
+\]
+Note that $[\tau^n]_2$ is not required because verification only involves $[\tau]_2 - [\omega^i]_2$. The hiding shift $[Z(\tau)]_1 = [\tau^n]_1 - [1]_1$ is obtained for free from the SRS. Precompute the table $W_j = [Z(\tau)/(\tau - \omega^j)]_1$ via a single $\mathbb{G}_1$ FFT of the SRS (data-independent, adding $n$ compressed $\mathbb{G}_1$ elements). Public parameters are $\mathsf{pp} = (\mathsf{SRS}, \{W_j\}_{j=0}^{n-1})$.
+
+At $n = 1024$, the verification SRS is $(n+1)\cdot 48 + 2\cdot 96 + 48 = 48.3\,\text{KB}$, which is $\approx 1070\times$ smaller than Catalano--Fiore ($50.5\,\text{MB}$). Operational parameters, including the precomputed table $\{W_j\}$, total $48.3 + 48 = 96.3\,\text{KB}$ (a $512\times$ raw size reduction).
+
+\paragraph{$\mathsf{HVC.Com}(\mathsf{pp}, \vec{m}) \to (C, \mathsf{aux})$.}
+Interpolate $f(X) \in \mathbb{F}_p[X]$ of degree $< n$ such that $f(\omega^i) = m_i$ for all $i \in \{0, \dots, n-1\}$. Sample a random blinding factor $\rho \leftarrow \mathbb{F}_p$. Construct $F(X) = f(X) + \rho Z(X)$ and compute the commitment:
+\[
+C = [F(\tau)]_1 = [f(\tau)]_1 + \rho [Z(\tau)]_1.
+\]
+Output $(C, \mathsf{aux} = \rho)$. The committer initially retains $\rho$ for opening generation. An outer protocol may transmit an auxiliary scalar when the server must derive incremental openings; the concrete transcript used in this paper is specified in Section~\ref{sec:optimized-uss}.
+
+\paragraph{$\mathsf{HVC.Open}(\mathsf{pp}, \vec{m}, \mathsf{aux}, i) \to \Lambda_i$.}
+Compute the quotient polynomial $q_i(X) = (F(X) - m_i) / (X - \omega^i)$ and output the opening proof $\Lambda_i = [q_i(\tau)]_1$.
+
+\paragraph{$\mathsf{HVC.Ver}(\mathsf{pp}, C, i, m_i, \Lambda_i) \to 1 / 0$.}
+Check if the following pairing equation holds:
+\[
+e\left(C - [m_i]_1, [1]_2\right) = e\left(\Lambda_i, [\tau]_2 - [\omega^i]_2\right).
+\]
+
+\paragraph{$\mathsf{HVC.ComHom}(\mathsf{pp}, C, C') \to C_{\mathrm{sum}}$ \& $\mathsf{HVC.OpenHom}(\mathsf{pp}, \Lambda_i, \Lambda'_i) \to \Lambda_{i, \mathrm{sum}}$.}
+$\mathsf{KHVC}$ inherits additive homomorphism directly from the underlying KZG framework:
+\[
+\mathsf{HVC.ComHom}(\mathsf{pp}, C, C') = C + C', \quad \mathsf{HVC.OpenHom}(\mathsf{pp}, \Lambda_i, \Lambda'_i) = \Lambda_i + \Lambda'_i.
+\]
+Re-randomization can be executed via $\mathsf{ReRand}(C) = C + \rho' [Z(\tau)]_1$, which updates the blinding scalar without altering any vector evaluations $F(\omega^i)$.
+
+\subsection{Formal Security Proofs}
+
+\begin{theorem}[Position Binding]
+If the $q$-SDH assumption holds with $q = n$, then $\mathsf{KHVC}$ satisfies position binding. An adversary with advantage $\varepsilon$ yields a $q$-SDH solver with advantage $\varepsilon - O(1/p)$.
+\end{theorem}
+\begin{proof}
+Suppose a PPT adversary $\mathcal{A}$ outputs a commitment $C$, index $i$, and two distinct openings $(m, \Lambda)$ and $(m', \Lambda')$ for $m \neq m'$ such that both pass verification:
+\[
+e(C - [m]_1, [1]_2) = e(\Lambda, [\tau]_2 - [\omega^i]_2), \quad
+e(C - [m']_1, [1]_2) = e(\Lambda', [\tau]_2 - [\omega^i]_2).
+\]
+Subtracting the two equations gives $e([m' - m]_1, [1]_2) = e(\Lambda - \Lambda', [\tau]_2 - [\omega^i]_2)$. By bilinear properties, this simplifies to:
+\[
+[m' - m]_1 = (\tau - \omega^i) (\Lambda - \Lambda').
+\]
+Since $m \neq m'$, $(m' - m)$ is invertible in $\mathbb{F}_p$ except with probability $O(1/p)$. Multiplying both sides by $(m' - m)^{-1}$ yields:
+\[
+\left[ \frac{1}{\tau - \omega^i} \right]_1 = (m' - m)^{-1} (\Lambda - \Lambda').
+\]
+Given a $q$-SDH challenge instance $([1]_1, [\tau]_1, \dots, [\tau^n]_1, [1]_2, [\tau]_2)$, the reduction sets $c = -\omega^i$ and outputs $(c, [1/(\tau + c)]_1)$ as a valid solution to $q$-SDH with advantage $\varepsilon - O(1/p)$.
+\end{proof}
+
+\begin{theorem}[Statistical Position Hiding in CGLT23's Figure~6]
+\label{thm:hide}
+In the position-hiding game of CGLT23~\cite[Fig.~6, Def.~7]{CGLT23}, the adversary receives $\mathsf{crs}$, $C$, and $\{\Lambda_j\}_{j\neq i^*}$, but not $\mathsf{aux}$. Except with probability at most $n/p$ over setup (the event $\tau\in\Omega$), the two KHVC challenge distributions are identical. Thus KHVC has position-hiding advantage at most $n/p$.
+\end{theorem}
+\begin{proof}
+The adversary chooses a target index $i^*$ and two message vectors $\vec{m}_0, \vec{m}_1$ that agree on all slots $j \neq i^*$. Let $\Delta m = m_{i^*,1} - m_{i^*,0}$, and let $L_{i^*}(X)$ be the $i^*$-th Lagrange basis polynomial over $\Omega$. The interpolated polynomials satisfy $f_1(X) = f_0(X) + \Delta m \cdot L_{i^*}(X)$.
+
+Provided $\tau \notin \Omega$, $Z(\tau) \neq 0$. For any blinding factor $\rho_0 \in \mathbb{F}_p$ in world 0, define $\rho_1 = \rho_0 - \Delta m \cdot \frac{L_{i^*}(\tau)}{Z(\tau)}$. Evaluating $F_1(\tau)$ yields:
+\[
+F_1(\tau) = f_1(\tau) + \rho_1 Z(\tau) = f_0(\tau) + \Delta m L_{i^*}(\tau) + \left(\rho_0 - \Delta m \frac{L_{i^*}(\tau)}{Z(\tau)}\right) Z(\tau) = F_0(\tau).
+\]
+Hence, $C_1=[F_1(\tau)]_1=[F_0(\tau)]_1=C_0$ under this coupling. For every revealed $j\neq i^*$,
+\[
+ \Lambda_{b,j}=\left[\frac{F_b(\tau)-m_{b,j}}{\tau-\omega^j}\right]_1 .
+\]
+Since $m_{0,j}=m_{1,j}$ and $F_0(\tau)=F_1(\tau)$, all these openings are simultaneously equal under the same coupling. The map $\rho_0\mapsto\rho_1$ is a uniform bijection, so the joint distributions of $(C_b,\{\Lambda_{b,j}\}_{j\neq i^*})$ are identical. Including the public CRS does not change this statistical argument. Accounting for the setup event gives the stated advantage.
+\end{proof}
+
+\paragraph{The auxiliary scalar is outside Figure~6.}
+Theorem~\ref{thm:hide} does not disclose the blinding scalar used for the challenge commitment itself. If an adversary were given that $\rho$ together with $C$, it could compute $D=C-\rho[Z(\tau)]_1=[f_b(\tau)]_1$ and compare $D$ with the two candidate values computable from the SRS. Accordingly, when the outer USS protocol discloses the auxiliary scalar of an incremental commitment, the complete update transcript must be analyzed separately; Theorem~\ref{thm:hide} alone does not cover that disclosure.
+
+
+
+\subsection{Efficiency Lemmas and Fast Updates}
+
+\begin{lemma}[All-Openings Decomposition]
+\label{lem:fk20}
+Let $F = f + \rho Z$ with $\deg f < n$ and $m_i = F(\omega^i) = f(\omega^i)$. Then:
+\[
+\frac{F(X) - m_i}{X - \omega^i} = \frac{f(X) - m_i}{X - \omega^i} + \rho \cdot \frac{Z(X)}{X - \omega^i}.
+\]
+Equivalently, running FK20~\cite{FK20} on the length-$n$ prefix $(f_0 - \rho, f_1, \dots, f_{n-1})$ computes all baseline openings $\pi_i^{\mathrm{FK20}}$, yielding $\Lambda_i = \pi_i^{\mathrm{FK20}} + \rho \cdot W_i$, where $W_i = [Z(\tau)/(\tau - \omega^i)]_1$. KeyUp operations opening zero vectors reduce to $n$ scalar multiplications over precomputed $W_j$, avoiding $O(n^2)$ naive MSMs.
+\end{lemma}
+
+\begin{lemma}[One-Hot FileUp Openings]
+\label{lem:onehot}
+Let $\Delta \in \mathbb{F}_p$, $i \in \{0, \dots, n-1\}$, and $f = \Delta L_i$ where $L_i(X) = \frac{\omega^i}{n} \frac{Z(X)}{X - \omega^i}$. Write $F = f + \rho Z$. For every $j \neq i$, the opening update is given in closed form by:
+\[
+\Lambda_j = \Delta \cdot \frac{\omega^i}{n} \cdot \frac{W_i - W_j}{\omega^i - \omega^j} + \rho \cdot W_j.
+\]
+The opening at slot $i$ is computed via a single length-$n$ MSM. This avoids running dense FK20 algorithms when a single-slot vector update ($\mathsf{FileUp}$) occurs.
+\end{lemma}

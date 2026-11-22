@@ -1,0 +1,46 @@
+\section{Ring-LWR Payload Encryption and Updates}
+\label{sec:ue}
+
+Let $R_q=\mathbb Z_q[X]/(X^N+1)$ and $R_p=\mathbb Z_p[X]/(X^N+1)$, where $(N,q,p)=(1024,998244353,2^{16})$. For every block index $b$, define
+\[
+a_b=H_{\mathrm{ring}}(b)\in R_q,\qquad
+F_x(b)=\left\lfloor \frac{p}{q}(a_bx)\right\rfloor\in R_p,
+\]
+with coefficientwise scaling and rounding down. $H_{\mathrm{ring}}$ is a random oracle in the analysis. In Rust the domain is fixed for the entire protocol, and the NTT representation of $a_b$ is cached in public parameters and shared across repositories. The cache is derived from public inputs and is absent from the ciphertext record.
+
+\paragraph{Fresh encryption and retrieval.}
+The epoch secret has a body secret polynomial $s\gets R_q$ and an independent RLWE header key pair $(\mathsf{sk}_H,\mathsf{pk}_H)$. For each file sample $\sigma\gets R_q$ independently. Encode each byte as a coefficient multiplied by $2^8$ and pad the final block to $N$ coefficients. Return the body $c_b=\mathsf{encode}(m_b)+F_{s+\sigma}(b)$, the header $h=\mathsf{Hdr.Enc}_{\mathsf{pk}_H}(\sigma)$, and the byte length. To decrypt, recover $\sigma$ from $h$, then subtract the pad, decode the bytes, and truncate to the recorded length.
+
+\paragraph{KeyUp with independent wide noise.}
+The epoch token contains $\Delta=s'-s$, the header switching key $\mathsf{ksk}$, and $\mathsf{pk}_H'$. For each file, sample an independent $\delta\gets R_q$ and first compute
+\[
+ c_b'=c_b+F_{\Delta+\delta}(b),\qquad
+ (u_i',v_i')=\mathsf{KeySwitch}(\mathsf{ksk},h_i)+\mathsf{Hdr.Enc}_{\mathsf{pk}_H'}(\delta_i).
+\]
+Then sample a polynomial $z_i$ whose coefficients are independent and uniform in the integer interval $[-L,L]$, and return
+\[
+ h_i'=(u_i',\,v_i'+z_i)\pmod{Q_H}.
+\]
+The mask is now $\sigma_i+\delta_i$. The body path and its NTT cache are unchanged. The value $z_i$ is fresh local randomness of the rotation procedure, not a separate token field or public record. A simulator retains the values it sampled; the protocol client need not retain their history.
+
+\paragraph{Wide-noise header baseline.}
+Use $N_H=16384$, the 256-bit modulus $Q_H=2^{256}-2719743$, message scale $S=2^{213}$, wide-noise bound $L=2^{204}$, and $D=64$ base-16 gadget digits. Thus $Q_H\equiv1\pmod{32768}$, supporting the negacyclic NTT. Secret and encryption-error coefficients remain independent and uniform in $\{-1,0,1\}$. The public key is $(a,as_H+e)$, also written $(a,d)$, and a fresh encryption of $\mu$ is
+\[
+ (ar+e_1,\;dr+e_2+S\mu).
+\]
+The switching key contains $D$ raw encryptions under the new public key of $16^k s_H$, $k=0,\ldots,D-1$, without the scale $S$. Centered decoding uses the scale $S$ after subtracting the new-secret phase. These parameters are a correctness-and-simulation baseline, not by themselves a claim of 128-bit RLWE security. Existing Rust measurements below describe the earlier prototype, not an implementation of this revised header.
+
+\paragraph{Correctness budget.}
+For all $x,y$, $F_x(b)+F_y(b)=F_{x+y}(b)+e_b$ with $\|e_b\|_\infty\le1$. Thus a body has at most $t$ units of accumulated rounding error after $t$ updates and decodes for $t\le127$ if the header correctly decrypts the accumulated mask.
+
+For the header, a fresh non-wide residual has coefficient bound $B_0=2N_H+1$. After removing the simulator-known wide-noise history, a conservative bound after $t$ rotations is
+\[
+ B_t=B_0\bigl[1+t(1+15DN_H)\bigr].
+\]
+The actual accumulated wide noise is at most $tL$ in absolute value. Correct decoding therefore follows from
+\[
+ tL+B_t<S/2,\qquad
+ (t+1)(q-1)S+tL+B_t<Q_H/2.
+\]
+At $t=127$, $B_{127}=65457303322752$, and both inequalities hold; the body and header budgets therefore support 127 rotations of one file version. FileUp starts a new version and resets this counter. These are deterministic design-budget checks, not computational-security estimates.
+
